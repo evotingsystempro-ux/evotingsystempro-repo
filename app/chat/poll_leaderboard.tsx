@@ -8,10 +8,11 @@ import {
     ActivityIndicator,
     Alert,
     RefreshControl,
+    Image,
     Platform,
 } from "react-native";
 import { AntDesign, Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import ReusableScreen from "@/components/ReusableScreen";
 import { GlobalContext } from "@/context";
 import { db } from "@/firebase";
@@ -92,7 +93,7 @@ const countFor = (emails: string[], email: string) =>
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function PollLeaderboardScreen() {
-    const { rawUserEmail, userid } = useContext(GlobalContext);
+    const { rawUserEmail, userid, userName } = useContext(GlobalContext);
 
     const params = useLocalSearchParams<{ pollId: string; creatorEmail: string }>();
     const pollId = Array.isArray(params.pollId) ? params.pollId[0] : params.pollId;
@@ -114,6 +115,12 @@ export default function PollLeaderboardScreen() {
         togglingEmailRef.current = val;
         setTogglingEmail(val);
     };
+
+    useFocusEffect(
+        useCallback(() => {
+            if (!userName) router.navigate("./PollsListScreen");
+        }, [userName])
+    );
 
     // ── votedEmails: state + ref so async handlers never read stale values ─────
     // For "single" polls this holds at most one email.
@@ -311,16 +318,14 @@ export default function PollLeaderboardScreen() {
             Alert.alert("Poll closed", "This poll is no longer accepting votes.");
             return;
         }
-        console.log("CHECK__(((())))::::", isVoterValidated);
-        // 30-second lock for single-vote polls
+
         if (poll.requires_voters_validation === true && !isVoterValidated) {
             setLockedIndices(new Set());
-            setWait_checking_voter_validation("Your're not validated");
+            setWait_checking_voter_validation("You can't vote");
             setLockedIndices(prev => new Set(prev).add(index));
             return;
         }
-
-        setWait_checking_voter_validation("Vote successful");
+        setWait_checking_voter_validation("");
 
         const current = votedEmailsRef.current;
         const hasVotedThis = current.includes(aspirantEmail);
@@ -513,11 +518,11 @@ export default function PollLeaderboardScreen() {
         <ReusableScreen>
             <View style={styles.topHeader}>
                 <TouchableOpacity
-                    onPress={() => router.back()}
+                    onPress={() => router.navigate("./PollsListScreen")}
                     style={styles.backBtn}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
-                    <Ionicons name="arrow-back" size={18} color="#1F9F4E" />
+                    <Ionicons name="arrow-back" size={18} color="#fff" />
                 </TouchableOpacity>
 
                 <View style={styles.titleBlock}>
@@ -563,6 +568,22 @@ export default function PollLeaderboardScreen() {
                                 {closed ? (expired ? "Expired" : "Closed") : "Live"}
                             </Text>
                         </View>
+
+                        {poll.requires_voters_validation === true ? (
+                            <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="verified" size={12} color="#3abf1fff" />
+                                <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
+                                    VIP Voters only
+                                </Text>
+                            </View>
+                        ) : (
+                            <View style={{ paddingHorizontal: 9, paddingVertical: 2, borderRadius: 20, backgroundColor: "#fee2e2", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="cancel" size={12} color="#ef4444" />
+                                <Text style={{ color: "#e644efff", fontSize: 12, fontWeight: "500" }}>
+                                    Open to all
+                                </Text>
+                            </View>
+                        )}
 
                         {poll.poll_verification_status === "verified" ? (
                             <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -659,11 +680,22 @@ export default function PollLeaderboardScreen() {
                                     <View key={asp.email} style={styles.card}>
                                         {/* Top row */}
                                         <View style={styles.cardTopRow}>
-                                            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-                                                <Text style={styles.avatarText}>
-                                                    {asp.name.charAt(0).toUpperCase()}
-                                                </Text>
-                                            </View>
+
+
+                                            {asp.photo && asp.photo.length > 10 ? (
+                                                <View style={{ width: 45, height: 45 }}>
+                                                    <Image source={{ uri: asp.photo }} style={styles.avatarImage} resizeMode="cover" />
+                                                </View>
+                                            ) : (
+                                                <View style={[styles.avatar, { backgroundColor: asp.photo || avatarColor }]}>
+                                                    <Text style={styles.avatarText}>
+                                                        {asp.name?.charAt(0).toUpperCase() ?? '?'}
+                                                    </Text>
+                                                </View>
+                                            )}
+
+
+
                                             <View style={styles.cardNameBlock}>
                                                 <Text style={styles.cardName} ellipsizeMode="tail" numberOfLines={1}>{asp.name}</Text>
                                                 <Text style={styles.cardEmail} ellipsizeMode="tail" numberOfLines={1}>{asp.email}</Text>
@@ -793,12 +825,12 @@ const styles = StyleSheet.create({
     },
     backBtn: {
         width: 32, height: 32, borderRadius: 16,
-        backgroundColor: "#EAF6EE", alignItems: "center", justifyContent: "center",
+        backgroundColor: "#1F9F4E", alignItems: "center", justifyContent: "center",
     },
 
 
     body: { flex: 1, backgroundColor: "#fff", margin: 2, borderRadius: 12, overflow: "hidden" },
-    scroll: { flex: 1, backgroundColor: "#e9ede7ff", margin: 5 },
+    scroll: { flex: 1, backgroundColor: "#deead9ff", margin: 5 },
     scrollContent: { paddingBottom: 10 },
 
     statusRow: {
@@ -881,7 +913,7 @@ const styles = StyleSheet.create({
     emptyAspirantsWrap: { alignItems: "center", paddingVertical: 40, gap: 10, backgroundColor: "#fff" },
 
     alreadyVotedText: {
-        fontSize: 12,
+        fontSize: 14,
         color: "#ef4444",
         fontWeight: "600",
     },
@@ -940,4 +972,7 @@ const styles = StyleSheet.create({
         columnGap: 6,
         paddingTop: 4,   // bumped from 2
     },
+
+
+    avatarImage: { width: "100%", height: "100%", borderRadius: 25 },
 });

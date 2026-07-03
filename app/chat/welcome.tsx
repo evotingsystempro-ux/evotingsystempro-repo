@@ -115,23 +115,8 @@ const FeaturesCard: React.FC = () => (
       title="Multiple-Choice Poll"
       description={
         <>
-          Allow voters to vote for{" "}
-          <Text style={styles.highlightBlue}>multiple candidates</Text> in a
-          single poll. And voters are as well able to vote for any candidate multiple times.
-        </>
-      }
-    />
-
-    {/* ── Feature 3 ── */}
-    <FeatureItem
-      icon="card"
-      color="#D97706"
-      title="Pay-Per-Vote"
-      description={
-        <>
-          Monetize your poll by setting a{" "}
-          <Text style={styles.highlightOrange}>charge per vote</Text>. Collect
-          payments securely via Mobile Money, Card, or Crypto before a vote is cast.
+          Voters can cast{" "}
+          <Text style={styles.highlightOrange}>multiple </Text> votes for multiple candidates. Each vote costs <Text style={styles.highlightBlue}>1 vote = 1GHC.00 </Text>, generate revenue for the platform while giving your favorite candidate a better chance of winning.
         </>
       }
     />
@@ -155,12 +140,12 @@ const FeaturesCard: React.FC = () => (
     <FeatureItem
       icon="time"
       color="#DB2777"
-      title="Scheduled Voting Windows"
+      title="Scheduled Ending Windows"
       description={
         <>
           Set a precise{" "}
-          <Text style={styles.highlightPink}>start and end time</Text> for your
-          poll. Voting automatically opens and closes at your configured time.
+          <Text style={styles.highlightPink}>end time</Text> for your
+          poll. Voting automatically opens after publishing the poll, with notifications sent to voters / eligible voters immediately.
         </>
       }
     />
@@ -172,9 +157,8 @@ const FeaturesCard: React.FC = () => (
       title="Real-Time Results"
       description={
         <>
-          Watch votes come in{" "}
-          <Text style={styles.highlightCyan}>live with charts and counters</Text>.
-          Results are updated instantly as each vote is cast and verified.
+          Results are updated instantly {" "}
+          <Text style={styles.highlightCyan}> in realtime as each vote is cast and verified.</Text>
         </>
       }
     />
@@ -217,7 +201,7 @@ const FeaturesCard: React.FC = () => (
         <>
           Automatically notify eligible voters when a poll{" "}
           <Text style={styles.highlightPurple}>opens, closes, or results</Text>{" "}
-          are published — via push notification or email.
+          are published - via push notification or email.
         </>
       }
     />
@@ -239,7 +223,7 @@ const FeaturesCard: React.FC = () => (
   </View>
 );
 
-/* ─────────────────────────────────────────────────────────────────────────── */
+/* ──────────────── 550 = 120 + 70 + 130 + 30 + 100 = 100  ───────────────────────────────────────────────── */
 /*  WelcomePage                                                                */
 /* ─────────────────────────────────────────────────────────────────────────── */
 export default function WelcomePage() {
@@ -367,14 +351,12 @@ export default function WelcomePage() {
 
           {/* ── HEADER ── */}
           <View style={styles.headerRow}>
-            <View style={styles.logoContainer}>
-              <Image
-                source={require("@/assets/images/LOGO.png")}
-                style={styles.logo}
-                resizeMode="contain"
-              />
-            </View>
-            <View style={{ flex: 1, gap: 7, alignItems: "center", position: "relative", right: 12 }}>
+            <Image
+              source={require("@/assets/images/LOGO.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <View style={{ gap: 7, alignItems: "center", }}>
               <Text style={styles.title}>eVoting System Pro</Text>
               <Text style={styles.subtitle}>Secure · Transparent · Precise</Text>
             </View>
@@ -442,11 +424,11 @@ const styles = StyleSheet.create({
 
   /* ── Header ── */
   headerRow: {
-    flexDirection: "row", alignItems: "center",
-    gap: 12, marginBottom: 14, alignSelf: "center", position: "relative", right: 15,
+    flexDirection: "row", alignSelf: "center",
+    marginBottom: 14, gap: 5, alignItems: "center",
   },
   logoContainer: { borderRadius: 30 },
-  logo: { width: 75, height: 75, borderRadius: 26 },
+  logo: { width: 60, height: 60, borderRadius: 26, },
   title: {
     fontSize: 20.7, fontWeight: "900",
     color: C.brand, letterSpacing: -0.3,

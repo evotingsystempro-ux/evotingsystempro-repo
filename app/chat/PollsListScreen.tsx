@@ -11,6 +11,7 @@ import {
     TextInput,
     LayoutAnimation,
     UIManager,
+    Image,
 } from "react-native";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -32,9 +33,10 @@ interface PollSummary {
     deadline: string | null;
     creatorEmail: string;
     creatorName: string;
+    logUrl?: string; // Added logUrl for the poll logo
     aspirantCount: number;
     dateCreated: string;
-    createdAt: number;              // epoch ms — used for reliable sorting
+    createdAt: number;
     showResults: boolean;
     isAnonymous: boolean;
     requires_voters_validation: boolean;
@@ -55,7 +57,6 @@ const isExpired = (deadline: string | null) =>
 const isPollClosed = (p: PollSummary) =>
     p.status === "closed" || isExpired(p.deadline);
 
-// dateCreated is already a human-readable locale string — return as-is
 const formatDate = (dateStr: string) => dateStr;
 
 const AVATAR_PALETTE = ["#1F9F4E", "#2563EB", "#D97706", "#7C3AED", "#DB2777", "#0D9488"];
@@ -98,9 +99,10 @@ export default function PollsListScreen() {
                     deadline: d.deadline ?? null,
                     creatorEmail,
                     creatorName,
+                    logUrl: d.logUrl ?? d.logoUrl, // Accounts for the logUrl parameter
                     aspirantCount: d.aspirantCount ?? 0,
                     dateCreated: d.dateCreated ?? "",
-                    createdAt: d.createdAt?.toMillis?.() ?? 0,  // Firestore timestamp → ms
+                    createdAt: d.createdAt?.toMillis?.() ?? 0,
                     showResults: d.showResults ?? true,
                     isAnonymous: d.isAnonymous ?? false,
                     requires_voters_validation: d.requires_voters_validation ?? "false",
@@ -114,7 +116,6 @@ export default function PollsListScreen() {
 
             const groupList: CreatorGroup[] = Array.from(byCreator.entries()).map(
                 ([creatorEmail, polls]) => {
-                    // Sort newest first using epoch ms — locale strings are not reliable
                     polls.sort((a, b) => b.createdAt - a.createdAt);
                     return {
                         creatorEmail,
@@ -124,8 +125,6 @@ export default function PollsListScreen() {
                 }
             );
 
-            // Groups are ordered by their most recent poll — whichever creator
-            // just published rises to the top of the whole list.
             groupList.sort((a, b) => b.polls[0].createdAt - a.polls[0].createdAt);
             setGroups(groupList);
             applyFilters(groupList, search, filter);
@@ -190,36 +189,35 @@ export default function PollsListScreen() {
         });
     };
 
-    // ── Derived counts ────────────────────────────────────────────────────────
-
     const totalPolls = filtered.reduce((s, g) => s + g.polls.length, 0);
     const livePolls = filtered.reduce(
         (s, g) => s + g.polls.filter((p) => !isPollClosed(p)).length, 0
     );
 
-    // ── Loading ───────────────────────────────────────────────────────────────
-
     const truncateMiddle = useCallback(
-        (value?: string, start = 6, end = 6): string | undefined => {
+        (value?: string, start = 12, end = 12): string | undefined => {
             if (!value || value.length <= start + end) return value;
-            return `${value.slice(0, start)}…${value.slice(-end)}`;
+            return `${value.slice(0, start)}...${value.slice(-end)}`;
         },
         []
     );
+
+    // ── Loading ───────────────────────────────────────────────────────────────
 
     if (loading) {
         return (
             <ReusableScreen>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}
+                    <TouchableOpacity onPress={() => router.navigate("./PollsListScreen")} style={styles.backBtn}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                        <Ionicons name="arrow-back" size={18} color="#1F9F4E" />
+                        <Ionicons name="arrow-back" size={20} color="#ffffffff" />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>All Polls</Text>
+                    <View style={{ width: 32 }} />
                 </View>
                 <View style={styles.centered}>
                     <ActivityIndicator size="large" color="#1F9F4E" />
-                    <Text style={styles.loadingText}>Loading polls…</Text>
+                    <Text style={styles.loadingText}>Fetching latest polls...</Text>
                 </View>
             </ReusableScreen>
         );
@@ -232,7 +230,7 @@ export default function PollsListScreen() {
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                    <Ionicons name="arrow-back" size={18} color="#1F9F4E" />
+                    <Ionicons name="arrow-back" size={20} color="#fff" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>All Polls</Text>
                 <View style={styles.headerCountPill}>
@@ -243,11 +241,11 @@ export default function PollsListScreen() {
             {/* Search bar */}
             <View style={styles.searchSection}>
                 <View style={styles.searchWrap}>
-                    <Ionicons name="search-outline" size={17} color="#9ca3af" />
+                    <Ionicons name="search-outline" size={18} color="#8c939fff" />
                     <TextInput
                         style={styles.searchInput}
-                        placeholder="Search polls or creators…"
-                        placeholderTextColor="#484747ff"
+                        placeholder="Search polls or creators..."
+                        placeholderTextColor="#949ba8ff"
                         value={search}
                         onChangeText={setSearch}
                         returnKeyType="search"
@@ -259,7 +257,7 @@ export default function PollsListScreen() {
                             onPress={() => setSearch("")}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         >
-                            <Ionicons name="close-circle" size={17} color="#9ca3af" />
+                            <Ionicons name="close-circle" size={18} color="#9CA3AF" />
                         </TouchableOpacity>
                     )}
                 </View>
@@ -274,9 +272,6 @@ export default function PollsListScreen() {
                                 onPress={() => setFilter(f)}
                                 activeOpacity={0.7}
                             >
-                                {f === "active" && (
-                                    <View style={[styles.filterDot, filter === f && styles.filterDotActiveOn]} />
-                                )}
                                 <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
                                     {f.charAt(0).toUpperCase() + f.slice(1)}
                                 </Text>
@@ -286,7 +281,7 @@ export default function PollsListScreen() {
                     {livePolls > 0 && filter === "all" && (
                         <View style={styles.liveBadge}>
                             <View style={styles.liveBadgeDot} />
-                            <Text style={styles.liveBadgeText}>{livePolls} live</Text>
+                            <Text style={styles.liveBadgeText}>{livePolls} Live</Text>
                         </View>
                     )}
                 </View>
@@ -313,12 +308,12 @@ export default function PollsListScreen() {
                 {filtered.length === 0 ? (
                     <View style={styles.emptyWrap}>
                         <View style={styles.emptyIconWrap}>
-                            <MaterialIcons name="ballot" size={40} color="#c9cfd6" />
+                            <MaterialIcons name="how-to-vote" size={40} color="#9CA3AF" />
                         </View>
                         <Text style={styles.emptyTitle}>No polls found</Text>
                         <Text style={styles.emptyDesc}>
                             {search
-                                ? "Try a different search term."
+                                ? "Try a different search term or filter."
                                 : "No polls have been created yet."}
                         </Text>
                     </View>
@@ -330,39 +325,36 @@ export default function PollsListScreen() {
 
                         return (
                             <View key={group.creatorEmail} style={styles.groupCard}>
-                                {/* Creator header — tappable to collapse */}
+                                {/* Creator header */}
                                 <TouchableOpacity
                                     style={styles.creatorHeader}
                                     onPress={() => toggleGroup(group.creatorEmail)}
-                                    activeOpacity={0.75}
+                                    activeOpacity={0.7}
                                 >
                                     <View style={[styles.creatorAvatar, { backgroundColor: avatarColor }]}>
                                         <Text style={styles.creatorAvatarText}>
                                             {group.creatorName.charAt(0).toUpperCase()}
                                         </Text>
                                     </View>
+
                                     <View style={styles.creatorInfo}>
                                         <Text style={styles.creatorName} numberOfLines={1}>
-                                            <Text style={{ color: "#e70a9dff", fontSize: 12 }}>CREATOR: </Text>{group.creatorName}
+                                            {group.creatorName}
                                         </Text>
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 7 }}>
-                                            <Text style={styles.creatorEmail} numberOfLines={1}>
-                                                {truncateMiddle(group.creatorEmail, 0, 17)}
-                                            </Text>
-                                        </View>
+                                        <Text style={styles.creatorEmail} numberOfLines={1}>
+                                            {truncateMiddle(group.creatorEmail, 15, 10)}
+                                        </Text>
                                     </View>
 
                                     <View style={styles.creatorRight}>
-                                        {liveInGroup > 0 && (
-                                            <View style={styles.miniLiveDot} />
-                                        )}
+                                        {liveInGroup > 0 && <View style={styles.miniLiveDot} />}
                                         <Text style={styles.creatorPollCount}>
                                             {group.polls.length}
                                         </Text>
                                         <Ionicons
                                             name={isCollapsed ? "chevron-down" : "chevron-up"}
-                                            size={16}
-                                            color="#9ca3af"
+                                            size={18}
+                                            color="#9CA3AF"
                                         />
                                     </View>
                                 </TouchableOpacity>
@@ -375,110 +367,118 @@ export default function PollsListScreen() {
                                             const expired = isExpired(poll.deadline);
                                             const requiresVoterValidation = poll.requires_voters_validation === true;
                                             const verified = poll.poll_verification_status === "verified";
+
                                             return (
                                                 <TouchableOpacity
                                                     key={poll.pollId}
                                                     style={styles.pollCard}
                                                     onPress={() => openPoll(poll)}
-                                                    activeOpacity={0.7}
+                                                    activeOpacity={0.6}
                                                 >
-                                                    <View style={[
-                                                        styles.statusRail,
-                                                        closed ? styles.railClosed : styles.railActive,
-                                                    ]} />
+                                                    {/* Top Section: Logo & Details */}
+                                                    <View style={styles.pollTopSection}>
 
-                                                    <View style={styles.pollInfo}>
-                                                        <View style={styles.pollTitleRow}>
-                                                            <Text style={[styles.pollTitle, { flex: 1, }]} ellipsizeMode="tail" numberOfLines={2}>
-                                                                {poll.title}
-                                                            </Text>
-                                                        </View>
+                                                        {/* Logo Thumbnail */}
+                                                        {poll.logUrl ? (
+                                                            <Image
+                                                                source={{ uri: poll.logUrl }}
+                                                                style={styles.pollLogo}
+                                                                resizeMode="cover"
+                                                            />
+                                                        ) : (
+                                                            <View style={styles.pollLogoPlaceholder}>
+                                                                <Ionicons name="stats-chart" size={24} color="#9CA3AF" />
+                                                            </View>
+                                                        )}
 
-                                                        <View style={styles.pollFooterRow}>
-                                                            <View style={[
-                                                                styles.statusBadge,
-                                                                closed ? styles.badgeClosed : styles.badgeActive,
-                                                            ]}>
-                                                                <Text style={[
-                                                                    styles.badgeText,
-                                                                    closed ? styles.badgeTextClosed : styles.badgeTextActive,
-                                                                ]}>
-                                                                    {closed ? (expired ? "Expired" : "Closed") : "Live"}
+                                                        {/* Info Body */}
+                                                        <View style={styles.pollDetailsBody}>
+                                                            <View style={styles.pollHeader}>
+                                                                <Text style={styles.pollTitle} numberOfLines={2}>
+                                                                    {poll.title}
                                                                 </Text>
+                                                                <View style={[
+                                                                    styles.statusBadge,
+                                                                    closed ? styles.badgeClosed : styles.badgeActive,
+                                                                ]}>
+                                                                    <Text style={[
+                                                                        styles.badgeText,
+                                                                        closed ? styles.badgeTextClosed : styles.badgeTextActive,
+                                                                    ]}>
+                                                                        {closed ? (expired ? "Expired" : "Closed") : "Live"}
+                                                                    </Text>
+                                                                </View>
                                                             </View>
 
+                                                            {/* Metadata */}
+                                                            <View style={styles.pollMetaRow}>
+                                                                {poll.dateCreated ? (
+                                                                    <Text style={styles.metaText}>
+                                                                        {formatDate(poll.dateCreated)}
+                                                                    </Text>
+                                                                ) : null}
 
-                                                            {poll.pollType === "multiple" && (
-                                                                <View style={styles.metaChip}>
-                                                                    <Ionicons name="layers-outline" size={12} color="#6b7280" />
-                                                                    <View> <Text style={styles.metaChipText}>Multi-vote</Text> </View>
+                                                                <View style={styles.metaDivider} />
 
+                                                                <View style={styles.metaIconGroup}>
+                                                                    <Ionicons name="people" size={14} color="#6B7280" />
+                                                                    <Text style={styles.metaText}>
+                                                                        {poll.aspirantCount} Aspirant{poll.aspirantCount !== 1 ? "s" : ""}
+                                                                    </Text>
                                                                 </View>
-                                                            )}
 
-                                                            <View style={styles.badgeGroup}>
-
-                                                                {requiresVoterValidation ? (
-                                                                    <View style={styles.verifiedBadge}>
-                                                                        <Ionicons name="checkmark-circle" size={13} color="#1F9F4E" />
-                                                                        <Text style={styles.verifiedBadgeText}>VIP voters only</Text>
-                                                                    </View>
-                                                                ) : (
-                                                                    <View style={styles.verifiedBadge}>
-                                                                        <Ionicons name="checkmark-circle" size={13} color="#1F9F4E" />
-                                                                        <Text style={styles.verifiedBadgeText}>Open to all</Text>
-                                                                    </View>
+                                                                {poll.isAnonymous && (
+                                                                    <>
+                                                                        <View style={styles.metaDivider} />
+                                                                        <View style={styles.metaIconGroup}>
+                                                                            <Ionicons name="eye-off" size={14} color="#6B7280" />
+                                                                            <Text style={styles.metaText}>Anon</Text>
+                                                                        </View>
+                                                                    </>
                                                                 )}
 
-                                                                {verified ? (
-                                                                    <View style={styles.verifiedBadge}>
-                                                                        <Ionicons name="checkmark-circle" size={13} color="#1F9F4E" />
-                                                                        <Text style={styles.verifiedBadgeText}>Verified</Text>
-                                                                    </View>
-                                                                ) :
-                                                                    (
-                                                                        <View style={styles.unverifiedBadge}>
-                                                                            <Ionicons name="close-circle" size={13} color="#fd7d7dff" />
-                                                                            <Text style={styles.unverifiedBadgeText}>Unverified</Text>
+                                                                {poll.pollType === "multiple" && (
+                                                                    <>
+                                                                        <View style={styles.metaDivider} />
+                                                                        <View style={styles.metaIconGroup}>
+                                                                            <Ionicons name="layers" size={14} color="#6B7280" />
+                                                                            <Text style={styles.metaText}>Multi</Text>
                                                                         </View>
-                                                                    )
-                                                                }
+                                                                    </>
+                                                                )}
                                                             </View>
-
-                                                            <Ionicons name="chevron-forward" size={14} color="#d1d5db" />
                                                         </View>
+                                                    </View>
 
-                                                        <View style={styles.pollMeta}>
+                                                    {/* Bottom Row: Badges & Arrow */}
+                                                    <View style={styles.pollFooter}>
+                                                        <View style={styles.badgeGroup}>
+                                                            {requiresVoterValidation ? (
+                                                                <View style={styles.tagVIP}>
+                                                                    <Ionicons name="shield-checkmark" size={12} color="#D97706" />
+                                                                    <Text style={styles.tagTextVIP}>VIP Only</Text>
+                                                                </View>
+                                                            ) : (
+                                                                <View style={styles.tagStandard}>
+                                                                    <Ionicons name="globe-outline" size={12} color="#4B5563" />
+                                                                    <Text style={styles.tagTextStandard}>Public</Text>
+                                                                </View>
+                                                            )}
 
-                                                            <View style={styles.pollFooterRow}>
-                                                                {poll.dateCreated ? (
-                                                                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                                                                        <View>
-                                                                            <Text style={styles.pollDate}>
-                                                                                {formatDate(poll.dateCreated)}
-                                                                            </Text>
-                                                                        </View>
-                                                                    </View>
-
-                                                                ) : <View />}
-                                                                <Ionicons name="chevron-forward" size={14} color="#d1d5db" />
-                                                            </View>
-
-                                                            <View style={styles.metaChip}>
-                                                                <Ionicons name="people-outline" size={12} color="#6b7280" />
-                                                                <Text style={styles.metaChipText}>
-                                                                    {poll.aspirantCount} aspirant{poll.aspirantCount !== 1 ? "s" : ""}
-                                                                </Text>
-                                                            </View>
-
-                                                            {poll.isAnonymous && (
-                                                                <View style={styles.metaChip}>
-                                                                    <Ionicons name="eye-off-outline" size={12} color="#6b7280" />
-                                                                    <Text style={styles.metaChipText}>Anonymous</Text>
+                                                            {verified ? (
+                                                                <View style={styles.tagVerified}>
+                                                                    <Ionicons name="checkmark-circle" size={12} color="#1F9F4E" />
+                                                                    <Text style={styles.tagTextVerified}>Verified</Text>
+                                                                </View>
+                                                            ) : (
+                                                                <View style={styles.tagUnverified}>
+                                                                    <Ionicons name="alert-circle" size={12} color="#EF4444" />
+                                                                    <Text style={styles.tagTextUnverified}>Unverified</Text>
                                                                 </View>
                                                             )}
                                                         </View>
 
+                                                        <Ionicons name="arrow-forward" size={16} color="#9CA3AF" />
                                                     </View>
                                                 </TouchableOpacity>
                                             );
@@ -497,142 +497,195 @@ export default function PollsListScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-    centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
-    loadingText: { fontSize: 14, color: "#9ca3af" },
+    centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, backgroundColor: '#F9FAFB' },
+    loadingText: { fontSize: 14, color: "#6B7280", fontWeight: "500" },
 
     header: {
         flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-        backgroundColor: "#fff", paddingHorizontal: 16, paddingTop: Platform.OS === "ios" ? 14 : 12,
-        // borderBottomWidth: 0.5, borderBottomColor: "#000",
+        backgroundColor: "#FFFFFF", paddingHorizontal: 16, paddingTop: Platform.OS === "ios" ? 16 : 12,
+
     },
     backBtn: {
-        width: 32, height: 32, borderRadius: 16,
-        backgroundColor: "#EAF6EE", alignItems: "center", justifyContent: "center",
+        width: 36, height: 36, borderRadius: 18,
+        backgroundColor: "#0fb760ff", alignItems: "center", justifyContent: "center",
     },
-    headerTitle: { fontSize: 16, fontWeight: "700", color: "#1a1a1a", letterSpacing: -0.2 },
+    headerTitle: { fontSize: 18, fontWeight: "700", color: "#111827", letterSpacing: -0.3 },
     headerCountPill: {
-        minWidth: 30, height: 24, paddingHorizontal: 8, borderRadius: 12,
-        backgroundColor: "#eee", alignItems: "center", justifyContent: "center",
+        minWidth: 32, height: 28, paddingHorizontal: 10, borderRadius: 14,
+        backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center",
     },
-    headerCountText: { fontSize: 12, fontWeight: "700", color: "#6b7280" },
+    headerCountText: { fontSize: 13, fontWeight: "700", color: "#4B5563" },
 
     searchSection: {
-        backgroundColor: "#fff",
-        // borderBottomWidth: 1, borderBottomColor: "#ccc",
-        paddingBottom: 10,
+        backgroundColor: "#FFFFFF",
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: "#F3F4F6",
     },
     searchWrap: {
         flexDirection: "row", alignItems: "center", gap: 8,
-        backgroundColor: "#eee", borderRadius: 50,
-        marginHorizontal: 16, marginTop: 4,
-        paddingHorizontal: 12, paddingVertical: 9, marginBottom: 4,
+        backgroundColor: "#f1f1f4ff", borderRadius: 20,
+        marginHorizontal: 16, marginTop: 12,
+        paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 12 : 10,
+        marginBottom: 8,
     },
     searchInput: {
-        flex: 1, fontSize: 15, color: "#1a1a1a",
-        paddingVertical: Platform.OS === "ios" ? 0 : 2,
+        flex: 1, fontSize: 15, color: "#111827",
         ...(Platform.OS === "web" && { outlineStyle: "none" } as any),
     },
 
     filterRow: {
         flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-        paddingHorizontal: 16, paddingTop: 10, gap: 8,
+        paddingHorizontal: 16, paddingTop: 8,
     },
-    filterPillGroup: { flexDirection: "row", gap: 6 },
+    filterPillGroup: { flexDirection: "row", gap: 8 },
     filterTab: {
-        flexDirection: "row", alignItems: "center", gap: 5,
-        paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: "#f3f4f6",
+        paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1, borderColor: "#E5E7EB",
     },
-    filterTabActive: { backgroundColor: "#1F9F4E" },
-    filterTabText: { fontSize: 13, fontWeight: "600", color: "#6b7280" },
-    filterTabTextActive: { color: "#fff" },
-    filterDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#9ca3af" },
-    filterDotActiveOn: { backgroundColor: "#fff" },
+    filterTabActive: { backgroundColor: "#1F9F4E", borderColor: "#1F9F4E" },
+    filterTabText: { fontSize: 13, fontWeight: "600", color: "#6B7280" },
+    filterTabTextActive: { color: "#FFFFFF" },
 
     liveBadge: {
-        flexDirection: "row", alignItems: "center", gap: 5,
-        paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20, backgroundColor: "#EAF6EE",
+        flexDirection: "row", alignItems: "center", gap: 6,
+        paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
+        backgroundColor: "#DEF7EC",
     },
-    liveBadgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#1F9F4E" },
-    liveBadgeText: { fontSize: 11, fontWeight: "700", color: "#1F9F4E" },
+    liveBadgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#046C4E" },
+    liveBadgeText: { fontSize: 12, fontWeight: "700", color: "#046C4E" },
 
-    scroll: { flex: 1, backgroundColor: "#e9ede7ff", marginHorizontal: 5 },
-    scrollContent: { paddingHorizontal: 2, paddingTop: 3, paddingBottom: 10, gap: 2 },
+    scroll: { flex: 1, backgroundColor: "#dde4d8ff" },
+    scrollContent: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 20, gap: 6 },
     scrollEmpty: { flex: 1 },
 
-    emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: 12 },
+    emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 16 },
     emptyIconWrap: {
-        width: 76, height: 76, borderRadius: 38, backgroundColor: "#fff",
+        width: 80, height: 80, borderRadius: 40, backgroundColor: "#F3F4F6",
         alignItems: "center", justifyContent: "center",
-        borderWidth: 1, borderColor: "#eceff2",
     },
-    emptyTitle: { fontSize: 16, fontWeight: "700", color: "#374151" },
-    emptyDesc: { fontSize: 13, color: "#9ca3af", textAlign: "center", paddingHorizontal: 40, lineHeight: 18 },
+    emptyTitle: { fontSize: 18, fontWeight: "700", color: "#111827" },
+    emptyDesc: { fontSize: 14, color: "#6B7280", textAlign: "center", paddingHorizontal: 40, lineHeight: 20 },
 
-    // Creator group card
+    // Creator Group Card
     groupCard: {
-        backgroundColor: "#fff", marginHorizontal: 5, marginTop: 5, borderRadius: 16, overflow: "hidden",
-        ...Platform.select({
-            ios: { shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
-            android: { elevation: 1 },
-            default: { boxShadow: "0 1px 4px rgba(0,0,0,0.06)" } as any,
-        }),
+        backgroundColor: "#FFFFFF",
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+        overflow: "hidden",
     },
     creatorHeader: {
-        flexDirection: "row", alignItems: "center", gap: 10,
-        paddingHorizontal: 14, paddingVertical: 13,
+        flexDirection: "row", alignItems: "center", gap: 12,
+        paddingHorizontal: 16, paddingVertical: 14,
+        backgroundColor: "#FFFFFF",
     },
-    creatorAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
-    creatorAvatarText: { color: "#fff", fontWeight: "700", fontSize: 15 },
-    creatorInfo: { flex: 1 },
-    creatorName: { fontSize: 14, fontWeight: "700", color: "#1a1a1a" },
-    creatorEmail: { fontSize: 11.5, color: "#9ca3af", marginTop: 1 },
-    creatorRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+    creatorAvatar: {
+        width: 40, height: 40, borderRadius: 20,
+        alignItems: "center", justifyContent: "center"
+    },
+    creatorAvatarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
+    creatorInfo: { flex: 1, justifyContent: "center" },
+    creatorName: { fontSize: 15, fontWeight: "700", color: "#111827", marginBottom: 2 },
+    creatorEmail: { fontSize: 13, color: "#6B7280" },
+
+    creatorRight: { flexDirection: "row", alignItems: "center", gap: 10 },
     creatorPollCount: {
-        fontSize: 12, fontWeight: "700", color: "#6b7280",
-        backgroundColor: "#f3f4f6", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
+        fontSize: 13, fontWeight: "600", color: "#4B5563",
+        backgroundColor: "#F3F4F6", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
     },
-    miniLiveDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#1F9F4E" },
+    miniLiveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#10B981" },
 
-    pollsWrap: { paddingHorizontal: 8, paddingBottom: 4, gap: 6 },
+    pollsWrap: {
+        paddingHorizontal: 12, paddingBottom: 12, gap: 8, backgroundColor: "#FFFFFF",
+        borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 12
+    },
 
+    // Poll Card Layout
     pollCard: {
-        flexDirection: "row", borderRadius: 12, backgroundColor: "#fafbfc",
-        borderWidth: 0.5, borderColor: "#eef0f2", overflow: "hidden",
+        backgroundColor: "#FFFFFF",
+        borderRadius: 12,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.03,
+        shadowRadius: 2,
+        elevation: 1,
     },
-    statusRail: { width: 4 },
-    railActive: { backgroundColor: "#1F9F4E" },
-    railClosed: { backgroundColor: "#d1d5db" },
 
-    pollInfo: { flex: 1, padding: 12, gap: 7 },
-    pollTitleRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 },
-    pollTitle: { flex: 1, fontSize: 14, fontWeight: "600", color: "#545454ff", lineHeight: 19 },
-
-    badgeGroup: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 },
-    verifiedBadge: {
-        flexDirection: "row", alignItems: "center", gap: 3,
-        paddingHorizontal: 7, paddingVertical: 3, borderRadius: 14,
-        backgroundColor: "#e0f7fa",
+    pollTopSection: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 12,
+        marginBottom: 12,
     },
-    verifiedBadgeText: { fontSize: 12, color: "#1F9F4E", fontWeight: "500" },
 
-    unverifiedBadge: {
-        flexDirection: "row", alignItems: "center", gap: 3,
-        paddingHorizontal: 7, paddingVertical: 3, borderRadius: 14,
-        backgroundColor: "#eee",
+    pollLogo: {
+        width: 52,
+        height: 52,
+        borderRadius: 8,
+        backgroundColor: "#F3F4F6",
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
     },
-    unverifiedBadgeText: { fontSize: 12, color: "#999", fontWeight: "500" },
+    pollLogoPlaceholder: {
+        width: 52,
+        height: 52,
+        borderRadius: 8,
+        backgroundColor: "#F3F4F6",
+        alignItems: "center",
+        justifyContent: "center",
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+    },
 
-    pollMeta: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
-    metaChip: { flexDirection: "row", alignItems: "center", gap: 3 },
-    metaChipText: { fontSize: 12, color: "#6b7280" },
+    pollDetailsBody: {
+        flex: 1,
+        gap: 6,
+    },
 
-    pollFooterRow: { flexDirection: "row", gap: 6 },
-    pollDate: { fontSize: 12, color: "#b0b0b0" },
+    pollHeader: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 12,
+    },
+    pollTitle: { flex: 1, fontSize: 15, fontWeight: "600", color: "#111827", lineHeight: 20 },
 
-    statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, flexShrink: 0 },
-    badgeActive: { backgroundColor: "#EAF6EE" },
-    badgeClosed: { backgroundColor: "#f3f4f6" },
+    statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, flexShrink: 0 },
+    badgeActive: { backgroundColor: "#DEF7EC" },
+    badgeClosed: { backgroundColor: "#F3F4F6" },
     badgeText: { fontSize: 12, fontWeight: "700" },
-    badgeTextActive: { color: "#1F9F4E" },
-    badgeTextClosed: { color: "#9ca3af" },
+    badgeTextActive: { color: "#046C4E" },
+    badgeTextClosed: { color: "#6B7280" },
+
+    pollMetaRow: {
+        flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8,
+        marginTop: 2,
+    },
+    metaIconGroup: { flexDirection: "row", alignItems: "center", gap: 4 },
+    metaText: { fontSize: 13, color: "#6B7280", fontWeight: "500" },
+    metaDivider: { width: 4, height: 4, borderRadius: 2, backgroundColor: "#D1D5DB" },
+
+    pollFooter: {
+        flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+        borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 12,
+    },
+    badgeGroup: { flexDirection: "row", alignItems: "center", gap: 8 },
+
+    // Tag styles
+    tagStandard: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: "#F3F4F6" },
+    tagTextStandard: { fontSize: 12, color: "#4B5563", fontWeight: "600" },
+
+    tagVIP: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: "#FEF3C7" },
+    tagTextVIP: { fontSize: 12, color: "#B45309", fontWeight: "600" },
+
+    tagVerified: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: "#ECFDF5" },
+    tagTextVerified: { fontSize: 12, color: "#047857", fontWeight: "600" },
+
+    tagUnverified: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: "#FEF2F2" },
+    tagTextUnverified: { fontSize: 12, color: "#B91C1C", fontWeight: "600" },
 });

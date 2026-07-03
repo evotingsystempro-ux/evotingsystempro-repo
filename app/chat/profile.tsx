@@ -45,7 +45,6 @@ import { GlobalContext } from "@/context";
 import { UserStorageKeys } from "@/hooks/storageKeys";
 import { getTimeAgo } from "@/hooks/getTimeAgo";
 import ReusableScreen from "@/components/ReusableScreen";
-import BottomNavWallet from "@/components/BottomNavWallet";
 import ChatBanner from "@/components/ChatBanner";
 import PopupMenu from "@/components/PupupMenu";
 import { MenuProvider } from "react-native-popup-menu";
@@ -2085,7 +2084,6 @@ export default function ProfileScreen() {
                     </View>
                 </View>
             </SafeAreaView>
-            <BottomNavWallet />
         </ReusableScreen>
     );
 }

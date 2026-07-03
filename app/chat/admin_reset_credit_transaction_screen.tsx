@@ -2,7 +2,6 @@
  * admin_wallet_transaction_screen.tsx
  * ──────────────────────────────────────────────────────────────────────────────
  */
-
 import React, {
   useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from "react";

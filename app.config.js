@@ -47,6 +47,7 @@ export default {
       ],
       "expo-secure-store",
       "expo-apple-authentication",
+      "expo-asset",
     ],
     experiments: {
       typedRoutes: true,

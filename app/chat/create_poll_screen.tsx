@@ -36,18 +36,19 @@ interface Aspirant {
   id: string;
   name: string;
   email: string;
+  photoUri: string | null; // local preview uri, once picked
+  photoUrl: string | null; // uploaded download url, once uploaded
+  uploadingPhoto: boolean;
 }
 
 interface ManualVoterEntry {
   id: string;
   name: string;
-  code: string;
   email: string;
 }
 
 interface ParsedVoter {
   name: string;
-  code: string;
   email: string;
 }
 
@@ -80,19 +81,88 @@ const resolveImageMeta = (uri: string, mimeTypeFromPicker?: string) => {
   return { ext, contentType };
 };
 
-const MAX_LOGO_BYTES = 500 * 1024; // 500kb
-const MAX_LOGO_DIMENSION = 100; // px, longest side
+const MAX_IMAGE_KB = 100; // any uploaded image (logo, aspirant photo, ...) targets this file-size cap
+const MAX_IMAGE_BYTES = MAX_IMAGE_KB * 1024;
 
-const getProportionalSize = (width: number, height: number) => {
-  if (!width || !height) {
-    return { width: MAX_LOGO_DIMENSION, height: MAX_LOGO_DIMENSION };
+// Reads a picked image's file size in bytes, cross-platform:
+// - Uses the picker's own reported size first when available (fast path,
+//   no extra I/O).
+// - Falls back to expo-file-system on iOS/Android.
+// - Falls back to fetch + blob.size on web, since expo-file-system can't
+//   read blob: URIs there and the picker doesn't reliably report fileSize
+//   on web either.
+const getImageByteSize = async (uri: string, knownBytes?: number): Promise<number> => {
+  if (knownBytes) return knownBytes;
+
+  if (Platform.OS === "web") {
+    try {
+      const blob = await (await fetch(uri)).blob();
+      return blob.size;
+    } catch {
+      return 0;
+    }
   }
-  const scale = MAX_LOGO_DIMENSION / Math.max(width, height);
+
+  try {
+    const info = await FileSystem.getInfoAsync(uri, { size: true });
+    return (info.exists && "size" in info && info.size) || 0;
+  } catch {
+    return 0;
+  }
+};
+
+// Checks a picked image's FILE SIZE (KB) — not pixel dimensions — and, if
+// it's over maxBytes, proportionally shrinks the image toward that cap.
+//
+// File size roughly scales with pixel AREA (width × height) rather than a
+// single linear dimension, so the byte ratio we need to shave off is
+// applied to width/height as its SQUARE ROOT (area = scale² × area) — e.g.
+// a 400kb image capped at 100kb needs ~25% of its bytes, so each side is
+// scaled to sqrt(0.25) = 50%, roughly quartering the pixel area and, with
+// it, the file size.
+//
+// This is a single-pass estimate rather than a byte-exact guarantee — JPEG
+// output size also depends on image content/compression — but it reliably
+// lands oversized images in the right ballpark on every platform, since
+// expo-image-manipulator backs onto native resize APIs on iOS/Android and
+// an in-browser canvas on web (no platform branching needed here).
+const compressToTargetSize = async (
+  uri: string,
+  width: number,
+  height: number,
+  maxBytes: number,
+  knownBytes?: number
+): Promise<{ uri: string; wasResized: boolean; scalePercent: number }> => {
+  const originalBytes = await getImageByteSize(uri, knownBytes);
+
+  if (!originalBytes || originalBytes <= maxBytes) {
+    return { uri, wasResized: false, scalePercent: 100 };
+  }
+
+  const byteRatio = maxBytes / originalBytes; // e.g. 0.25 = need ~25% of the original bytes
+  const linearScale = Math.sqrt(byteRatio); // scale applied to width/height
+  const target = {
+    width: Math.max(1, Math.round((width || 1) * linearScale)),
+    height: Math.max(1, Math.round((height || 1) * linearScale)),
+  };
+
+  const manipulated = await manipulateAsync(
+    uri,
+    [{ resize: target }],
+    { compress: 0.8, format: SaveFormat.JPEG }
+  );
+
   return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
+    uri: manipulated.uri,
+    wasResized: true,
+    scalePercent: Math.round(linearScale * 100),
   };
 };
+
+// Used as the aspirant's "photo" value when no photo is uploaded — picks a
+// random color from the same palette used for the numbered avatars, e.g. "#1F9F4E".
+const getRandomAspirantColor = () =>
+  AVATAR_PALETTE[Math.floor(Math.random() * AVATAR_PALETTE.length)];
 
 const withTimeout = <T,>(promise: Promise<T>, ms = 20000): Promise<T> =>
   Promise.race([
@@ -103,8 +173,9 @@ const withTimeout = <T,>(promise: Promise<T>, ms = 20000): Promise<T> =>
   ]);
 
 // Turns a free-form voter code into a safe Firestore document ID.
-const sanitizeDocId = (raw: string) => {
-  const cleaned = raw.trim().replace(/\//g, "-").replace(/\s+/g, " ");
+// Turns a voter's email into a safe Firestore document ID.
+const sanitizeDocId = (rawEmail: string) => {
+  const cleaned = rawEmail.trim().toLowerCase().replace(/\//g, "-").replace(/\s+/g, "");
   return cleaned.length ? cleaned : `VOTER_${Date.now()}`;
 };
 
@@ -121,8 +192,8 @@ const parseDelimitedVoters = (text: string): ParsedVoter[] => {
     rows.length && rows[0][0] && /name/i.test(rows[0][0]) ? rows.slice(1) : rows;
 
   return dataRows
-    .map((r) => ({ name: r[0] || "", code: r[1] || "", email: r[2] || "" }))
-    .filter((v) => v.name && v.code && v.email && isValidEmail(v.email));
+    .map((r) => ({ name: r[0] || "", email: r[1] || "" }))
+    .filter((v) => v.name && v.email && isValidEmail(v.email));
 };
 
 // Parses an Excel workbook (base64-encoded .xlsx / .xls) into {name, code, email} rows.
@@ -143,10 +214,9 @@ const parseExcelVoters = (base64: string): ParsedVoter[] => {
   return dataRows
     .map((r) => ({
       name: String(r[0] ?? "").trim(),
-      code: String(r[1] ?? "").trim(),
-      email: String(r[2] ?? "").trim(),
+      email: String(r[1] ?? "").trim(),
     }))
-    .filter((v) => v.name && v.code && v.email && isValidEmail(v.email));
+    .filter((v) => v.name && v.email && isValidEmail(v.email));
 };
 
 // Reads a web blob: URI as base64 (expo-file-system doesn't support
@@ -174,8 +244,8 @@ export default function CreatePollScreen() {
   const [title, setTitle] = useState("");
   const [pollType, setPollType] = useState<PollType>("single");
   const [aspirants, setAspirants] = useState<Aspirant[]>([
-    { id: "1", name: "", email: "" },
-    { id: "2", name: "", email: "" },
+    { id: "1", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false },
+    { id: "2", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false },
   ]);
   const [deadline, setDeadline] = useState<Date | null>(null);
   const [isAnonymous, setIsAnonymous] = useState(false);
@@ -190,7 +260,7 @@ export default function CreatePollScreen() {
 
   // Option 2: manual entry — dynamic name+code+email rows with a "+" to add more.
   const [manualVoters, setManualVoters] = useState<ManualVoterEntry[]>([
-    { id: "1", name: "", code: "", email: "" },
+    { id: "1", name: "", email: "" },
   ]);
 
   // Option 1: file upload — CSV / Excel / Text, parsed cross-platform.
@@ -219,7 +289,14 @@ export default function CreatePollScreen() {
     if (aspirants.length >= 10) return;
     setAspirants((prev) => [
       ...prev,
-      { id: Date.now().toString(), name: "", email: "" },
+      {
+        id: Date.now().toString(),
+        name: "",
+        email: "",
+        photoUri: null,
+        photoUrl: null,
+        uploadingPhoto: false,
+      },
     ]);
   };
 
@@ -234,13 +311,123 @@ export default function CreatePollScreen() {
     );
   };
 
+  // ── Aspirant photo (optional) ───────────────────────────────────────────────
+  // If a creator skips this, handlePublish assigns a random color (e.g.
+  // "#1F9F4E") as the aspirant's "photo" value instead of a URL.
+
+  const pickAspirantPhoto = async (aspirantId: string) => {
+    if (Platform.OS !== "web") {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission needed",
+          "Please allow access to your photo library to add a photo."
+        );
+        return;
+      }
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets?.length) return;
+
+    const asset = result.assets[0];
+    setAspirants((prev) =>
+      prev.map((a) =>
+        a.id === aspirantId
+          ? { ...a, photoUri: asset.uri, photoUrl: null, uploadingPhoto: true }
+          : a
+      )
+    );
+
+    try {
+      let uploadUri = asset.uri;
+
+      const { uri: resizedUri, wasResized, scalePercent } = await compressToTargetSize(
+        asset.uri,
+        asset.width,
+        asset.height,
+        MAX_IMAGE_BYTES,
+        asset.fileSize
+      );
+
+      if (wasResized) {
+        uploadUri = resizedUri;
+        console.log(
+          `Aspirant photo exceeded ${MAX_IMAGE_KB}kb — scaled to ~${scalePercent}% of its original dimensions.`
+        );
+        setAspirants((prev) =>
+          prev.map((a) => (a.id === aspirantId ? { ...a, photoUri: resizedUri } : a))
+        );
+      }
+
+      const { ext, contentType } = resolveImageMeta(
+        uploadUri,
+        uploadUri !== asset.uri ? "image/jpeg" : asset.mimeType
+      );
+      const storagePath = `aspirant_photos/${rawUserEmail}/${generatePollId()}_${aspirantId}.${ext}`;
+      const storageRef = ref(storage, storagePath);
+
+      if (Platform.OS === "web") {
+        const response = await fetch(uploadUri);
+        const blob = await response.blob();
+        await withTimeout(uploadBytes(storageRef, blob, { contentType }));
+      } else {
+        const base64 = await FileSystem.readAsStringAsync(uploadUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await withTimeout(
+          uploadString(storageRef, base64, "base64", { contentType })
+        );
+      }
+
+      const downloadUrl = await getDownloadURL(storageRef);
+      setAspirants((prev) =>
+        prev.map((a) =>
+          a.id === aspirantId
+            ? { ...a, photoUrl: downloadUrl, uploadingPhoto: false }
+            : a
+        )
+      );
+    } catch (err) {
+      console.error("Aspirant photo upload failed:", err);
+      const timedOut = err instanceof Error && err.message === "Upload timed out";
+      Alert.alert(
+        "Upload failed",
+        timedOut
+          ? "Upload timed out. This can happen if Firebase Storage rules are blocking the write — please try again or contact support."
+          : "Could not upload the photo. Please try again."
+      );
+      setAspirants((prev) =>
+        prev.map((a) =>
+          a.id === aspirantId
+            ? { ...a, photoUri: null, photoUrl: null, uploadingPhoto: false }
+            : a
+        )
+      );
+    }
+  };
+
+  const removeAspirantPhoto = (aspirantId: string) => {
+    setAspirants((prev) =>
+      prev.map((a) =>
+        a.id === aspirantId ? { ...a, photoUri: null, photoUrl: null } : a
+      )
+    );
+  };
+
   // ── Voter validation helpers ────────────────────────────────────────────────
 
   const addManualVoter = () => {
     if (manualVoters.length >= 500) return;
     setManualVoters((prev) => [
       ...prev,
-      { id: Date.now().toString(), name: "", code: "", email: "" },
+      { id: Date.now().toString(), name: "", email: "" },
     ]);
   };
 
@@ -251,7 +438,7 @@ export default function CreatePollScreen() {
 
   const updateManualVoter = (
     id: string,
-    field: "name" | "code" | "email",
+    field: "name" | "email",
     value: string
   ) => {
     setManualVoters((prev) =>
@@ -382,27 +569,22 @@ export default function CreatePollScreen() {
     setUploadingLogo(true);
 
     try {
-      let originalSize = asset.fileSize ?? 0;
-      if (!originalSize && Platform.OS !== "web") {
-        try {
-          const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
-          originalSize = (info.exists && "size" in info && info.size) || 0;
-        } catch {
-          // If we can't determine size, fall through and skip resizing.
-        }
-      }
-
       let uploadUri = asset.uri;
 
-      if (originalSize > MAX_LOGO_BYTES) {
-        const target = getProportionalSize(asset.width, asset.height);
-        const manipulated = await manipulateAsync(
-          asset.uri,
-          [{ resize: target }],
-          { compress: 0.8, format: SaveFormat.JPEG }
+      const { uri: resizedUri, wasResized, scalePercent } = await compressToTargetSize(
+        asset.uri,
+        asset.width,
+        asset.height,
+        MAX_IMAGE_BYTES,
+        asset.fileSize
+      );
+
+      if (wasResized) {
+        uploadUri = resizedUri;
+        console.log(
+          `Logo exceeded ${MAX_IMAGE_KB}kb — scaled to ~${scalePercent}% of its original dimensions.`
         );
-        uploadUri = manipulated.uri;
-        setLogoUri(manipulated.uri);
+        setLogoUri(resizedUri);
       }
 
       const { ext, contentType } = resolveImageMeta(
@@ -519,14 +701,9 @@ export default function CreatePollScreen() {
       : manualVoters
         .map((v) => ({
           name: v.name.trim(),
-          code: v.code.trim(),
           email: v.email.trim(),
         }))
-        .filter((v) => v.name && v.code && v.email);
-
-  const voterCodeDuplicates = validatedVotersList
-    .map((v) => v.code.trim().toLowerCase())
-    .filter((c, i, arr) => c && arr.indexOf(c) !== i);
+        .filter((v) => v.name && v.email);
 
   const voterEmailDuplicates = validatedVotersList
     .map((v) => v.email.trim().toLowerCase())
@@ -540,7 +717,6 @@ export default function CreatePollScreen() {
     !requiresVoterValidation ||
     (!parsingFile &&
       validatedVotersList.length > 0 &&
-      voterCodeDuplicates.length === 0 &&
       voterEmailDuplicates.length === 0 &&
       !voterEmailsInvalid);
 
@@ -548,7 +724,9 @@ export default function CreatePollScreen() {
     title.trim().length > 0 &&
     !uploadingLogo &&
     aspirants.every((a) => a.name.trim().length > 0 && isValidEmail(a.email)) &&
+    aspirants.every((a) => !a.uploadingPhoto) &&
     duplicateEmails.length === 0 &&
+    deadline !== null &&
     voterValidationValid;
 
   // ── Derived progress (UI only) ──────────────────────────────────────────────
@@ -626,7 +804,9 @@ export default function CreatePollScreen() {
             {
               name: aspirant.name.trim(),
               email: aspirantEmail,
-              photo: "",
+              // Uploaded photo URL when provided; otherwise a random color
+              // (e.g. "#1F9F4E") acts as the aspirant's default avatar.
+              photo: aspirant.photoUrl || getRandomAspirantColor(),
               votes: 0,
               lastVotedAt: null,
               pollId,
@@ -642,12 +822,11 @@ export default function CreatePollScreen() {
       if (requiresVoterValidation && validatedVotersList.length > 0) {
         await Promise.all(
           validatedVotersList.map((voter) => {
-            const codeId = sanitizeDocId(voter.code);
+            const docId = sanitizeDocId(voter.email);
             return setDoc(
-              doc(db, "VALIDATED_VOTERS_DB", creatorEmail, pollId, codeId),
+              doc(db, "VALIDATED_VOTERS_DB", creatorEmail, pollId, docId),
               {
                 name: voter.name.trim(),
-                code: voter.code.trim(),
                 email: voter.email.trim().toLowerCase(),
                 hasVoted: false,
                 pollId,
@@ -713,10 +892,9 @@ export default function CreatePollScreen() {
             style={styles.backBtn}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="arrow-back" size={18} color="#1F9F4E" />
+            <Ionicons name="arrow-back" size={18} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Create a Poll</Text>
-          <View style={{ width: 32 }} />
         </View>
 
         <ScrollView
@@ -937,6 +1115,44 @@ export default function CreatePollScreen() {
                       Duplicate — each aspirant must have a unique email
                     </Text>
                   )}
+
+                  <Text style={[styles.subFieldLabel, { marginTop: 10 }]}>
+                    Photo <Text style={styles.optional}>(Optional)</Text>
+                  </Text>
+                  {asp.photoUri ? (
+                    <View style={styles.aspirantPhotoPreviewWrap}>
+                      <Image
+                        source={{ uri: asp.photoUri }}
+                        style={styles.aspirantPhotoPreview}
+                        resizeMode="cover"
+                      />
+                      {asp.uploadingPhoto && (
+                        <View style={styles.aspirantPhotoUploadOverlay}>
+                          <ActivityIndicator color="#fff" size="small" />
+                        </View>
+                      )}
+                      {!asp.uploadingPhoto && (
+                        <TouchableOpacity
+                          style={styles.aspirantPhotoRemoveBtn}
+                          onPress={() => removeAspirantPhoto(asp.id)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#ef4444" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.aspirantPhotoRow}
+                      onPress={() => pickAspirantPhoto(asp.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="camera-outline" size={16} color="#1F9F4E" />
+                      <Text style={styles.aspirantPhotoText}>
+                        Tap to add a photo — a color avatar is used if skipped
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               );
             })}
@@ -979,8 +1195,9 @@ export default function CreatePollScreen() {
 
             <View style={styles.dividerThin} />
 
-            <Text style={styles.fieldLabel}>
-              Voting deadline <Text style={styles.optional}>(Optional)</Text>
+            <Text style={[styles.fieldHint, { color: "#3e3f3fff", fontSize: 14, fontWeight: "600" }]}>Voting deadline *</Text>
+            <Text style={styles.fieldHint}>
+              Required - voters can only vote until this date & time.
             </Text>
 
             <TouchableOpacity
@@ -992,15 +1209,11 @@ export default function CreatePollScreen() {
               <Text style={[styles.deadlineText, deadline ? styles.deadlineTextActive : null]}>
                 {deadline ? deadline.toLocaleString() : "Set end date & time"}
               </Text>
-              {deadline && (
-                <TouchableOpacity
-                  onPress={() => setDeadline(null)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle" size={16} color="#9ca3af" />
-                </TouchableOpacity>
-              )}
             </TouchableOpacity>
+
+            {!deadline && (
+              <Text style={[styles.errorText, { marginLeft: 35 }]}>Voting deadline is required</Text>
+            )}
 
             {showDeadlinePicker && (
               <View style={styles.inlinePickerBox}>
@@ -1124,8 +1337,8 @@ export default function CreatePollScreen() {
                 </View>
               </View>
               <Text style={styles.fieldHint}>
-                Add every voter allowed to vote - name, a unique code or index number,
-                and email. They'll be saved to VALIDATED_VOTERS_DB for this poll.
+                Add every voter allowed to vote — name and email. They'll be saved to
+                VALIDATED_VOTERS_DB for this poll.
               </Text>
 
               {/* Option 1 vs Option 2 switch */}
@@ -1180,15 +1393,13 @@ export default function CreatePollScreen() {
               {voterValidationMode === "manual" && (
                 <View>
                   {manualVoters.map((voter, index) => {
-                    const code = voter.code.trim().toLowerCase();
-                    const isDupCode = !!code && voterCodeDuplicates.includes(code);
                     const emailTrim = voter.email.trim();
                     const email = emailTrim.toLowerCase();
                     const isDupEmail = !!email && voterEmailDuplicates.includes(email);
                     const isBadEmail = !!emailTrim && !isValidEmail(emailTrim);
                     return (
                       <View key={voter.id} style={styles.voterRow}>
-                        <View style={styles.voterRowInputs}>
+                        <View style={styles.voterRowEmailWrap}>
                           <TextInput
                             style={[styles.input, styles.voterInputName]}
                             placeholder="Voter name"
@@ -1197,17 +1408,6 @@ export default function CreatePollScreen() {
                             onChangeText={(t) => updateManualVoter(voter.id, "name", t)}
                             maxLength={80}
                           />
-                          <TextInput
-                            style={[styles.input, styles.voterInputCode]}
-                            placeholder="Code / Index No."
-                            placeholderTextColor="#b0b0b0"
-                            value={voter.code}
-                            onChangeText={(t) => updateManualVoter(voter.id, "code", t)}
-                            autoCapitalize="characters"
-                            maxLength={40}
-                          />
-                        </View>
-                        <View style={styles.voterRowEmailWrap}>
                           <TextInput
                             style={[styles.input, styles.voterInputEmail]}
                             placeholder="Email address"
@@ -1228,11 +1428,6 @@ export default function CreatePollScreen() {
                             </TouchableOpacity>
                           )}
                         </View>
-                        {isDupCode && (
-                          <Text style={styles.errorText}>
-                            Duplicate code — each voter needs a unique code
-                          </Text>
-                        )}
                         {isDupEmail && (
                           <Text style={styles.errorText}>
                             Duplicate email — each voter needs a unique email
@@ -1266,7 +1461,7 @@ export default function CreatePollScreen() {
                         Tap to upload CSV, Excel, or Text file
                       </Text>
                       <Text style={styles.fileUploadHint}>
-                        One voter per row — Name, Code, Email (e.g. John Mensah, VOTER001, john@example.com)
+                        One voter per row — Name, Email (e.g. John Mensah, john@example.com)
                       </Text>
                     </TouchableOpacity>
                   ) : (
@@ -1291,8 +1486,8 @@ export default function CreatePollScreen() {
                       {!parsingFile && uploadedVoters.length > 0 && (
                         <View style={styles.filePreviewList}>
                           {uploadedVoters.slice(0, 5).map((v, i) => (
-                            <Text key={`${v.code}-${i}`} style={styles.filePreviewItem}>
-                              {v.name} · {v.code} · {v.email}
+                            <Text key={`${v.email}-${i}`} style={styles.filePreviewItem}>
+                              {v.name} · {v.email}
                             </Text>
                           ))}
                           {uploadedVoters.length > 5 && (
@@ -1314,16 +1509,11 @@ export default function CreatePollScreen() {
                     </View>
                   )}
 
-                  {fileParseError && <Text style={styles.errorText}>{fileParseError}</Text>}
-                  {!fileParseError && voterCodeDuplicates.length > 0 && (
-                    <Text style={styles.errorText}>
-                      This file has duplicate codes — each voter needs a unique code.
-                    </Text>
-                  )}
+                  {fileParseError && <View><Text style={styles.errorText}>{fileParseError}</Text></View>}
                   {!fileParseError && voterEmailDuplicates.length > 0 && (
-                    <Text style={styles.errorText}>
-                      This file has duplicate emails — each voter needs a unique email.
-                    </Text>
+                    <View><Text style={styles.errorText}>
+                      This file has duplicate emails - each voter needs a unique email.
+                    </Text></View>
                   )}
                 </View>
               )}
@@ -1397,13 +1587,13 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#EAF6EE",
+    backgroundColor: "#1F9F4E",
     alignItems: "center",
     justifyContent: "center",
   },
   headerTitle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a", letterSpacing: -0.2 },
 
-  scroll: { flex: 1, backgroundColor: "#e9ede7ff", margin: 5, },
+  scroll: { flex: 1, backgroundColor: "#deead9ff", margin: 5, },
   scrollContent: { paddingHorizontal: 4, paddingTop: 5, paddingBottom: 30 },
 
   card: {
@@ -1447,7 +1637,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 13, fontWeight: "600", color: "#374151", marginBottom: 6 },
   subFieldLabel: { fontSize: 12, fontWeight: "600", color: "#6b7280", marginBottom: 5 },
   optional: { fontWeight: "400", color: "#9ca3af" },
-  fieldHint: { fontSize: 12, marginHorizontal: 20, color: "#9ca3af", marginBottom: 12, marginTop: -8 },
+  fieldHint: { marginLeft: 35, fontSize: 12, color: "#9ca3af", marginBottom: 12, marginTop: -8 },
 
   input: {
     borderWidth: 1,
@@ -1497,6 +1687,41 @@ const styles = StyleSheet.create({
     right: 8,
     backgroundColor: "#fff",
     borderRadius: 12,
+  },
+
+  aspirantPhotoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#A2E0B8",
+    borderStyle: "dashed",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#EAF6EE",
+  },
+  aspirantPhotoText: { fontSize: 12, color: "#1F9F4E", flex: 1 },
+  aspirantPhotoPreviewWrap: {
+    position: "relative",
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    overflow: "hidden",
+    backgroundColor: "#f3f4f6",
+  },
+  aspirantPhotoPreview: { width: "100%", height: "100%" },
+  aspirantPhotoUploadOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  aspirantPhotoRemoveBtn: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    backgroundColor: "#fff",
+    borderRadius: 10,
   },
 
   radioRow: {

@@ -33,7 +33,7 @@ yarn-error.*
 *.pem
 
 # local env files
-.env
+#.env
 .env*.local
 
 # typescript
@@ -46,3 +46,4 @@ google-services.json
 DATASET/google-services.json
 serviceAccountKey.json
 
+.env

@@ -10,16 +10,14 @@ import {
   StyleSheet,
   Platform,
 } from 'react-native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 
 type Props = {
   onSend: (text: string) => void;
   onTyping?: (text: string) => void;
-  openAttachSheet: () => void;
-  attachSheetVisible: boolean;
 };
 
-const InputBar = ({ onSend, onTyping, openAttachSheet, attachSheetVisible }: Props) => {
+const InputBar = ({ onSend, onTyping, }: Props) => {
   const [text, setText] = useState('');
   const [inputHeight, setInputHeight] = useState(40);
   const inputRef = useRef<TextInput>(null);
@@ -49,21 +47,7 @@ const InputBar = ({ onSend, onTyping, openAttachSheet, attachSheetVisible }: Pro
 
   return (
     <View style={[styles.inputWrapper, { marginBottom: Platform.OS === 'ios' ? 4 : 5 }]}>
-      {/* Attach toggle */}
-      <TouchableOpacity
-        onPress={openAttachSheet}
-        style={styles.iconBtn}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        activeOpacity={0.7}
-      >
-        <View style={[styles.attachCircle, attachSheetVisible && styles.attachCircleActive]}>
-          <Ionicons
-            name={attachSheetVisible ? 'close' : 'attach'}
-            size={19}
-            color={attachSheetVisible ? '#fff' : '#BF360C'}
-          />
-        </View>
-      </TouchableOpacity>
+
 
       {/* Text input */}
       <TextInput
@@ -76,7 +60,7 @@ const InputBar = ({ onSend, onTyping, openAttachSheet, attachSheetVisible }: Pro
         blurOnSubmit={false}
         onContentSizeChange={handleContentSizeChange}
         style={[styles.input, { height: Math.max(40, inputHeight) }]}
-        placeholderTextColor="#C4A49A"
+        placeholderTextColor="#8f8c8bff"
         onSubmitEditing={() => {
           if (Platform.OS !== 'web') handleSend();
         }}
@@ -166,7 +150,7 @@ const styles = StyleSheet.create({
     marginRight: 2,
   },
   sendButtonActive: {
-    backgroundColor: '#FF5722',
+    backgroundColor: '#289510ff',
   },
   sendInner: {
     marginLeft: 2,

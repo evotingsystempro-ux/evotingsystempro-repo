@@ -71,7 +71,6 @@ import { ref, onValue, set as rtdbSet, onDisconnect } from 'firebase/database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import InputBar from '@/components/InputChatBar';
-import AI_TRAINING_DATASET from '@/hooks/aiTrainingDataset.json';
 import { GlobalContext } from '@/context/index';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -82,7 +81,7 @@ import { MenuProvider } from 'react-native-popup-menu';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? "";
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? "AIzaSyBn_VnwoP-iyrxQ5ACJRN2q4WuDs6567T4";
 const genAI = new GoogleGenerativeAI(API_KEY);
 const chatModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
@@ -598,17 +597,6 @@ function useAIMemory() {
     } catch (err) { console.warn('[AIMemory] load:', err); }
   }, []);
 
-  const ensureIndex = useCallback(() => {
-    if (!isIndexDirty.current) return;
-    const combined = [...AI_TRAINING_DATASET, ...memoryDB.current];
-    vectorIndex.current = { vectors: [], responses: [] };
-    for (const item of combined) {
-      if (!item.embedding) continue;
-      vectorIndex.current.vectors.push(item.embedding);
-      vectorIndex.current.responses.push(item.response);
-    }
-    isIndexDirty.current = false;
-  }, []);
 
   const store = useCallback(async (query: string, response: string, embedding: number[]) => {
     if (!embedding.length || memoryDB.current.some((m) => m.query.toLowerCase() === query.toLowerCase())) return;
@@ -619,7 +607,7 @@ function useAIMemory() {
     catch (err) { console.warn('[AIMemory] save:', err); }
   }, []);
 
-  return { load, ensureIndex, store, memoryDB, vectorIndex };
+  return { load, store, memoryDB, vectorIndex };
 }
 
 // ─── Search Bar ───────────────────────────────────────────────────────────────
@@ -715,7 +703,7 @@ const ChatRoom = () => {
   const collectedTraits = useRef<Partial<Record<PersonalityStage, string>>>({});
   const entityMemory = useRef({ person: '', project: '' });
 
-  const { load: loadMemory, ensureIndex, store: storeMemory, vectorIndex } = useAIMemory();
+  const { load: loadMemory, store: storeMemory, vectorIndex } = useAIMemory();
 
   // FIX 4: Defer ALL heavy setup (memory load, Firestore listener, presence write)
   // until after the navigator's transition animation and first layout are complete.
@@ -1022,30 +1010,19 @@ const ChatRoom = () => {
   }, []);
 
   const retrieveContext = useCallback(async (queryText: string, k = 3) => {
-    ensureIndex();
     const embedding = await generateEmbedding(queryText);
     return vectorIndex.current.vectors
       .map((v, i) => ({ score: cosineSimilarity(embedding, v), response: vectorIndex.current.responses[i] }))
       .sort((a, b) => b.score - a.score)
       .slice(0, k);
-  }, [cosineSimilarity, ensureIndex, generateEmbedding, vectorIndex]);
+  }, [cosineSimilarity, generateEmbedding, vectorIndex]);
 
-  const keywordSearch = useCallback((queryText: string): string | null => {
-    const trimmed = queryText.trim();
-    for (const item of AI_TRAINING_DATASET) {
-      const itemQ = item.query.trim();
-      if (itemQ.toLowerCase() === trimmed.toLowerCase()) return item.response;
-      const eq = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const ei = itemQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (new RegExp(`\\b${eq}\\b`, 'i').test(itemQ) || new RegExp(`\\b${ei}\\b`, 'i').test(trimmed)) return item.response;
-    }
-    return null;
-  }, []);
 
   const detectEntity = useCallback((text: string) => {
     const lower = text.toLowerCase();
     if (lower.includes('stanley afon')) entityMemory.current.person = 'Stanley Afon';
     if (lower.includes('smartpeople')) entityMemory.current.project = 'SmartPeople';
+    if (lower.includes('evotingsystempro')) entityMemory.current.project = 'EvotingSystemPro';
   }, []);
 
   const resolvePronouns = useCallback((text: string): string => {
@@ -1230,13 +1207,6 @@ Task: ${task}
       if (/^(i mean|i meant|the one called)/i.test(clarified))
         clarified = clarified.replace(/^(i mean|i meant|the one called)/i, '').trim();
 
-      const keywordAnswer = keywordSearch(clarified);
-      if (keywordAnswer) {
-        const polished = await geminiReply(`Deliver the following info in your natural warm voice. Don't invent facts — only rephrase.\n\nInfo: ${keywordAnswer}`);
-        await processAiResponse(polished || keywordAnswer, aiObj);
-        return;
-      }
-
       updateStatus('Sending');
       const retrieved = await retrieveContext(clarified);
       const prompt = buildBasePrompt({
@@ -1264,7 +1234,7 @@ Task: ${task}
       );
       await processAiResponse(errorText, aiObj);
     }
-  }, [buildBasePrompt, buildPersonalityPrompt, detectEntity, generateEmbedding, geminiReply, getConversationHistory, keywordSearch, memberProfile, processAiResponse, resolvePronouns, retrieveContext, setChatMessages, storeMemory]);
+  }, [buildBasePrompt, buildPersonalityPrompt, detectEntity, generateEmbedding, geminiReply, getConversationHistory, memberProfile, processAiResponse, resolvePronouns, retrieveContext, setChatMessages, storeMemory]);
 
   const sendPushNotification = useCallback(async (localMsg: ChatMessage) => {
     if (!clientEmail || isClientOnline) return;
@@ -1322,48 +1292,6 @@ Task: ${task}
       setChatMessages((prev: ChatMessage[]) => prev.map((m) => m.txtMsgId === txtMsgId ? { ...m, status: 'Failed' } : m));
     }
   }, [chatId, chatIsLydia, clientEmail, clientIconUri, clientName, scrollToBottom, sendPushNotification, setChatMessages, userId, userName, userPhotoUrl]);
-
-  const pickImage = useCallback(async () => {
-    setAttachSheetVisible(false);
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission required', 'Please allow access to your photo library.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85, allowsMultipleSelection: false });
-    if (!result.canceled && result.assets[0]?.uri) {
-      const sendTs = nextSendTs();
-      await sendMediaMessage('image', result.assets[0].uri, sendTs);
-    }
-  }, [sendMediaMessage]);
-
-  const pickCamera = useCallback(async () => {
-    setAttachSheetVisible(false);
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission required', 'Please allow camera access.'); return; }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-    if (!result.canceled && result.assets[0]?.uri) {
-      const sendTs = nextSendTs();
-      await sendMediaMessage('image', result.assets[0].uri, sendTs);
-    }
-  }, [sendMediaMessage]);
-
-  const pickDocument = useCallback(async () => {
-    setAttachSheetVisible(false);
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-      if (!result.canceled && result.assets[0]) {
-        const sendTs = nextSendTs();
-        await sendMediaMessage('file', result.assets[0].uri, sendTs, result.assets[0].name);
-      }
-    } catch (err) { console.warn('[ChatRoom] document pick:', err); }
-  }, [sendMediaMessage]);
-
-  const openAttachSheet = useCallback(() => {
-    if (IS_IOS) {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', '📷 Camera', '🖼  Photo', '📎 Document'], cancelButtonIndex: 0 },
-        (idx) => { if (idx === 1) pickCamera(); else if (idx === 2) pickImage(); else if (idx === 3) pickDocument(); }
-      );
-    } else { setAttachSheetVisible((v) => !v); }
-  }, [pickCamera, pickDocument, pickImage]);
 
   const sendMessage = useCallback(async (messageText: string) => {
     if (!messageText.trim()) return;
@@ -1596,35 +1524,12 @@ Task: ${task}
               </View>
             )}
 
-            {/* ── Android Attach Sheet ── */}
-            {attachSheetVisible && !IS_IOS && (
-              <View style={styles.attachSheet}>
-                <View style={styles.attachSheetHandle} />
-                <View style={styles.attachSheetRow}>
-                  {[
-                    { icon: 'camera-outline' as const, label: 'Camera', color: '#f97316', onPress: pickCamera },
-                    { icon: 'image-outline' as const, label: 'Photo', color: '#8b5cf6', onPress: pickImage },
-                    { icon: 'document-text-outline' as const, label: 'Document', color: '#0ea5e9', onPress: pickDocument },
-                  ].map(({ icon, label, color, onPress }) => (
-                    <TouchableOpacity key={label} style={styles.attachItem} onPress={onPress}>
-                      <View style={[styles.attachIconCircle, { backgroundColor: color }]}>
-                        <Ionicons name={icon} size={24} color="#fff" />
-                      </View>
-                      <Text style={styles.attachLabel}>{label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
             {/* ── Input Row ── */}
             <View style={styles.inputRow}>
               <View style={styles.inputBarWrap}>
                 <InputBar
                   onSend={sendMessage}
                   onTyping={handleTyping}
-                  openAttachSheet={openAttachSheet}
-                  attachSheetVisible={attachSheetVisible}
                 />
               </View>
             </View>
@@ -1651,13 +1556,13 @@ Task: ${task}
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  container: { flex: 1, backgroundColor: '#efeae2' },
+  container: { flex: 1, backgroundColor: '#d4ead4ff' },
 
   // FIX 1 continued: The background is now a single View with a subtle diagonal
   // pattern achieved via backgroundColor + a repeating gradient border trick.
   // Zero extra native nodes. Visual result is identical to the original dot grid.
   waBgBase: {
-    backgroundColor: '#e5ddd5',
+    backgroundColor: '#d4ead4ff',
     // On native we can't use CSS repeating-linear-gradient, but the solid
     // off-white/tan is a faithful WhatsApp-style background on its own.
     // If you need the grid dots, render a single <Image> with a small tiled PNG
@@ -1665,7 +1570,7 @@ const styles = StyleSheet.create({
   },
 
   messageList: { paddingVertical: 6, paddingHorizontal: 4 },
-  offlineBanner: { backgroundColor: '#f0a818', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, gap: 6 },
+  offlineBanner: { backgroundColor: '#1f9e10ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, gap: 6 },
   offlineBannerText: { color: '#fff', fontSize: 12, fontWeight: '600' },
   header: { height: 65, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingTop: IS_IOS ? 0 : 4, borderBottomWidth: 0.5, borderBottomColor: '#ddd' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },

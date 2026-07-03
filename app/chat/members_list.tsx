@@ -16,7 +16,6 @@ import {
   TextInput,
   Platform,
   ActivityIndicator,
-  Modal,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { router, useFocusEffect } from "expo-router";
@@ -28,6 +27,7 @@ import {
   doc,
   onSnapshot,
   updateDoc,
+  arrayUnion,
 } from "firebase/firestore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, createUserWithEmailAndPassword, db } from "@/firebase";
@@ -58,6 +58,7 @@ const STORAGE_KEY = "APP_DEVICE_UUID";
 const COOKIE_KEY = "app_device_uuid";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 3650;
 const HYBRID_FP_COLLECTION = "Hybridfingerprint_DB";
+const MAX_ACCOUNT_RELINKS = 3; // number of times a device's linked account may be corrected/switched
 const PAGE_SIZE = 15;
 const ITEM_HEIGHT = 66;
 const PUSH_NOTIFICATION_URL =
@@ -98,7 +99,12 @@ interface MemberItem {
   [key: string]: unknown;
 }
 
-type FpGateResult = { allowed: true } | { allowed: false; linkedEmail: string };
+// `allowed: true` covers both a first-time link and a fresh relink.
+// `relinked: true` additionally tells the caller a switch just happened,
+// in case the UI wants to surface a "device re-linked to new account" notice.
+type FpGateResult =
+  | { allowed: true; relinked?: boolean; relinksRemaining?: number }
+  | { allowed: false; linkedEmail: string };
 
 // ─── Crypto / Fingerprint helpers ─────────────────────────────────────────────
 
@@ -326,6 +332,14 @@ async function clearFpCache(): Promise<void> {
 }
 
 // ─── Fingerprint gate ─────────────────────────────────────────────────────────
+//
+// Policy: exactly ONE account may be actively linked to a device at a time
+// (so a device can never be used to double-vote or double-farm wallet credit
+// simultaneously across accounts). However, a user is allowed up to
+// MAX_ACCOUNT_RELINKS (3) *corrections* — e.g. they logged into the wrong
+// account by mistake and want to switch to the right one. Each correction
+// consumes one relink. Once the limit is hit, the device is locked to
+// whichever email is currently linked.
 
 async function checkHybridFingerprintGate(
   fingerprintHash: string,
@@ -346,20 +360,55 @@ async function checkHybridFingerprintGate(
         deviceModel: Device.modelName ?? "unknown",
         deviceBrand: Device.brand ?? "unknown",
         osVersion: Device.osVersion ?? "unknown",
+        relinkCount: 0,
+        previousEmails: [],
         createdAt: serverTimestamp(),
         lastSeen: serverTimestamp(),
       });
       await writeFpCache({ fingerprintHash, email: normalizedEmail, source });
-      return { allowed: true };
+      return { allowed: true, relinksRemaining: MAX_ACCOUNT_RELINKS };
     }
 
-    const linkedEmail: string = snap.data().email;
+    const data = snap.data() as any;
+    const linkedEmail: string = data.email;
+    const relinkCount: number = data.relinkCount ?? 0;
+
     if (linkedEmail === normalizedEmail) {
       updateDoc(docRef, { lastSeen: serverTimestamp() }).catch((err) =>
         console.warn("lastSeen update failed:", err)
       );
       await writeFpCache({ fingerprintHash, email: normalizedEmail, source });
-      return { allowed: true };
+      return { allowed: true, relinksRemaining: MAX_ACCOUNT_RELINKS - relinkCount };
+    }
+
+    // Different account trying to use this device.
+    if (relinkCount < MAX_ACCOUNT_RELINKS) {
+      await updateDoc(docRef, {
+        email: normalizedEmail,
+        relinkCount: relinkCount + 1,
+        previousEmails: arrayUnion(linkedEmail),
+        lastRelinkAt: serverTimestamp(),
+        lastSeen: serverTimestamp(),
+      });
+
+      // Revoke the previously-linked account's active session on this device
+      // so the old and new accounts can't both stay "active" at once.
+      try {
+        await setDoc(
+          doc(db, "user_sessions", linkedEmail),
+          { activeDeviceId: null, revokedAt: serverTimestamp(), revokedReason: "device_relinked" },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn("Failed to revoke previous account session on relink:", err);
+      }
+
+      await writeFpCache({ fingerprintHash, email: normalizedEmail, source });
+      return {
+        allowed: true,
+        relinked: true,
+        relinksRemaining: MAX_ACCOUNT_RELINKS - (relinkCount + 1),
+      };
     }
 
     return { allowed: false, linkedEmail };
@@ -385,7 +434,8 @@ async function runFingerprintGateWithCache(email: string): Promise<FpGateResult>
       if (!snap.exists()) {
         await clearFpCache();
       } else {
-        const linkedEmail: string = snap.data().email;
+        const data = snap.data() as any;
+        const linkedEmail: string = data.email;
         if (linkedEmail === normalizedEmail) {
           updateDoc(docRef, { lastSeen: serverTimestamp() }).catch(() => { });
           writeFpCache({
@@ -393,10 +443,14 @@ async function runFingerprintGateWithCache(email: string): Promise<FpGateResult>
             email: normalizedEmail,
             source: cached.source,
           }).catch(() => { });
-          return { allowed: true };
+          return {
+            allowed: true,
+            relinksRemaining: MAX_ACCOUNT_RELINKS - (data.relinkCount ?? 0),
+          };
         }
+        // Cache says a different account is now being used on this device;
+        // fall through to the full gate so the relink logic/limit applies.
         await clearFpCache();
-        return { allowed: false, linkedEmail };
       }
     } catch (err) {
       console.warn("Cached FP Firestore read failed (failing open):", err);
@@ -413,76 +467,97 @@ async function runFingerprintGateWithCache(email: string): Promise<FpGateResult>
   }
 }
 
-// ─── FingerprintBlockModal ────────────────────────────────────────────────────
+// ─── FingerprintBlockScreen (plain JSX, no Modal) ─────────────────────────────
+// Full-block screen shown when the device has used up all its relinks and is
+// locked to a different account than the one currently signed in.
 
-interface FingerprintBlockModalProps {
-  visible: boolean;
+interface FingerprintBlockScreenProps {
   linkedEmail: string;
   currentUserEmail: string;
   onDismiss: () => void;
   onLogout: () => void;
 }
 
-function FingerprintBlockModal({
-  visible,
+function FingerprintBlockScreen({
   linkedEmail,
   currentUserEmail,
   onDismiss,
   onLogout,
-}: FingerprintBlockModalProps) {
+}: FingerprintBlockScreenProps) {
   const isAdmin = ADMIN_EMAILS.has(currentUserEmail.trim().toLowerCase());
 
   return (
-    <Modal
-      transparent
-      visible={visible}
-      animationType="fade"
-      onRequestClose={isAdmin ? onDismiss : undefined}
-    >
-      <View style={fpStyles.overlay}>
-        <View style={fpStyles.card}>
+    <View style={fpStyles.overlay}>
+      <View style={fpStyles.card}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, }}>
           <View style={fpStyles.iconWrap}>
-            <Ionicons name="shield-checkmark-outline" size={32} color="#f97316" />
+            <Ionicons name="shield-checkmark-outline" size={22} color="#f97316" />
           </View>
-          <Text style={fpStyles.title}>Device Already Linked</Text>
           <View style={fpStyles.emailBlock}>
             <Text style={fpStyles.emailLabel}>Login with this email</Text>
             <Text style={fpStyles.emailValue}>{linkedEmail}</Text>
           </View>
-
-          <TouchableOpacity style={fpStyles.logoutBtn} onPress={onLogout} activeOpacity={0.85}>
-            <Ionicons name="log-out-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={fpStyles.logoutText}>Sign out</Text>
-          </TouchableOpacity>
-
-          {isAdmin ? (
-            <TouchableOpacity style={fpStyles.dismissBtn} onPress={onDismiss} activeOpacity={0.75}>
-              <Text style={fpStyles.dismissText}>Admin: Dismiss</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text style={fpStyles.hint}>
-              Please sign in with the email shown above to continue.
-            </Text>
-          )}
         </View>
+
+
+        <TouchableOpacity style={fpStyles.logoutBtn} onPress={onLogout} activeOpacity={0.85}>
+          <Ionicons name="log-out-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={fpStyles.logoutText}>Sign out</Text>
+        </TouchableOpacity>
+
+        {isAdmin ? (
+          <TouchableOpacity style={fpStyles.dismissBtn} onPress={onDismiss} activeOpacity={0.75}>
+            <Text style={fpStyles.dismissText}>Admin: Dismiss</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={fpStyles.dismissBtn} onPress={() => router.navigate("./comments")} activeOpacity={0.75}>
+            <Text style={[fpStyles.dismissText, { textDecorationLine: "underline", color: "blue" }]}>Message Admin</Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </Modal>
+    </View>
+  );
+}
+
+// ─── RelinkNotice (plain JSX banner, no Modal) ────────────────────────────────
+// Small dismissible banner shown right after a device successfully switches
+// to a new account, telling the user how many corrections they have left.
+
+interface RelinkNoticeProps {
+  relinksRemaining: number;
+  onDismiss: () => void;
+}
+
+function RelinkNotice({ relinksRemaining, onDismiss }: RelinkNoticeProps) {
+  return (
+    <View style={fpStyles.noticeBar}>
+      <Ionicons name="swap-horizontal-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+      <Text style={fpStyles.noticeText}>
+        Device switched to this account. {relinksRemaining}{" "}
+        {relinksRemaining === 1 ? "correction" : "corrections"} left.
+      </Text>
+      <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+        <Ionicons name="close" size={16} color="#fff" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const fpStyles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", paddingHorizontal: 24 },
-  card: { backgroundColor: "#fff", borderRadius: 16, paddingHorizontal: 24, paddingVertical: 24, width: "100%", maxWidth: 300, alignItems: "center", borderWidth: 1, borderColor: "#eee" },
-  iconWrap: { width: 60, height: 60, borderRadius: 30, backgroundColor: "#faece0ff", alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", paddingHorizontal: 24, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 },
+  card: { backgroundColor: "#fff", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 15, width: "100%", maxWidth: 300, alignItems: "center", borderWidth: 1, borderColor: "#eee" },
+  iconWrap: { padding: 8, borderRadius: 30, backgroundColor: "#faece0ff", alignItems: "center", justifyContent: "center", marginBottom: 12 },
   title: { fontSize: 17, fontWeight: "700", color: "#1a1a1a", marginBottom: 12, textAlign: "center" },
-  emailBlock: { backgroundColor: "#fff5ec", borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, alignItems: "center", marginBottom: 20, width: "100%" },
-  emailLabel: { fontSize: 11, color: "#aaa", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 },
+  emailBlock: { backgroundColor: "#fff", borderRadius: 10, paddingVertical: 5, paddingHorizontal: 10, alignItems: "center", marginBottom: 10, },
+  emailLabel: { fontSize: 11, color: "#da7542ff", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 },
   emailValue: { fontSize: 15, fontWeight: "700", color: "#f97316", textAlign: "center" },
   hint: { fontSize: 12, color: "#999", textAlign: "center", paddingHorizontal: 8, lineHeight: 17 },
-  logoutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#f97316", borderRadius: 12, paddingVertical: 11, paddingHorizontal: 32, marginBottom: 14, width: "100%" },
+  logoutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#f97316", borderRadius: 12, paddingVertical: 11, paddingHorizontal: 32, marginBottom: 14, width: "60%" },
   logoutText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   dismissBtn: { paddingHorizontal: 20, paddingVertical: 4 },
   dismissText: { fontSize: 13, fontWeight: "600", color: "#ef4444" },
+  noticeBar: { flexDirection: "row", alignItems: "center", backgroundColor: "#16a34a", paddingVertical: 8, paddingHorizontal: 14 },
+  noticeText: { flex: 1, color: "#fff", fontSize: 12, fontWeight: "600" },
 });
 
 // ─── Member List Item ─────────────────────────────────────────────────────────
@@ -711,6 +786,8 @@ export default function MembersList() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [fpBlocked, setFpBlocked] = useState(false);
   const [fpLinkedEmail, setFpLinkedEmail] = useState("");
+  const [relinksRemaining, setRelinksRemaining] = useState<number | null>(null);
+  const [showRelinkNotice, setShowRelinkNotice] = useState(false);
 
   const initDone = useRef(false);
 
@@ -758,11 +835,35 @@ export default function MembersList() {
             if (cached) {
               const docRef = doc(db, HYBRID_FP_COLLECTION, cached.fingerprintHash);
               getDoc(docRef).then((snap) => {
-                if (!snap.exists() || snap.data().email !== normalizedEmail) {
+                if (!snap.exists()) {
                   clearFpCache();
                   AsyncStorage.removeItem(DEVICE_VERIFIED_KEY);
-                  setFpLinkedEmail(snap.exists() ? snap.data().email : "");
+                  setFpLinkedEmail("");
                   setFpBlocked(true);
+                  return;
+                }
+                const data = snap.data() as any;
+                if (data.email !== normalizedEmail) {
+                  // Account on this device changed since we last checked
+                  // (e.g. relinked from another screen/session). Re-run the
+                  // gate so the relink allowance is applied consistently.
+                  clearFpCache();
+                  AsyncStorage.removeItem(DEVICE_VERIFIED_KEY);
+                  runFingerprintGateWithCache(rawUserEmail).then((result: any) => {
+                    if (!result.allowed) {
+                      setFpLinkedEmail(result.linkedEmail);
+                      setFpBlocked(true);
+                    } else {
+                      if (typeof result.relinksRemaining === "number") {
+                        setRelinksRemaining(result.relinksRemaining);
+                      }
+                      if (result.relinked) setShowRelinkNotice(true);
+                      AsyncStorage.setItem(
+                        DEVICE_VERIFIED_KEY,
+                        JSON.stringify({ email: normalizedEmail, verifiedAt: Date.now() })
+                      );
+                    }
+                  });
                 } else {
                   updateDoc(docRef, { lastSeen: serverTimestamp() }).catch(() => { });
                   writeFpCache({ fingerprintHash: cached.fingerprintHash, email: normalizedEmail, source: cached.source }).catch(() => { });
@@ -774,13 +875,17 @@ export default function MembersList() {
           }
         }
 
-        const result = await runFingerprintGateWithCache(rawUserEmail);
+        const result: any = await runFingerprintGateWithCache(rawUserEmail);
         if (!result.allowed) {
           await clearFpCache();
           await AsyncStorage.removeItem(DEVICE_VERIFIED_KEY);
           setFpLinkedEmail(result.linkedEmail);
           setFpBlocked(true);
         } else {
+          if (typeof result.relinksRemaining === "number") {
+            setRelinksRemaining(result.relinksRemaining);
+          }
+          if (result.relinked) setShowRelinkNotice(true);
           await AsyncStorage.setItem(DEVICE_VERIFIED_KEY, JSON.stringify({ email: normalizedEmail, verifiedAt: Date.now() }));
         }
       } catch (err) {
@@ -940,42 +1045,6 @@ export default function MembersList() {
     })();
   }, [userId, deviceId, isConnectedNET]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Add this near the top of your file, outside the component
-
-  /* 
-    useEffect(() => {
-      const saveCreator = async () => {
-        const creatorName = userName;
-        const creatorEmail = rawUserEmail;
-  
-        if (!creatorEmail) return;   // guard: don't run if email isn't ready yet
-  
-        try {
-          const creatorRef = doc(db, "VOTING_POOL_DB", creatorEmail);
-          const creatorSnap = await getDoc(creatorRef);
-  
-          if (!creatorSnap.exists()) {
-            await setDoc(creatorRef, {
-              name: creatorName || "Unknown",
-              email: creatorEmail,
-              status: "active",
-              createdAt: serverTimestamp(),
-              dateCreated: new Date().toLocaleDateString(),
-              timeCreated: new Date().toLocaleTimeString(),
-            });
-          } else {
-            await updateDoc(creatorRef, { status: "active" });
-          }
-        } catch (err) {
-          console.error("Creator save failed:", err);
-        }
-      };
-  
-      saveCreator();
-    }, [userId, deviceId, isConnectedNET]); */
-
-
-
   const visibleMembers = useMemo<MemberItem[]>(() => {
     if (!members?.length) return [];
     let list = members.filter((m) => m.clientId !== userId);
@@ -1078,7 +1147,7 @@ export default function MembersList() {
     [clientsOnlineStatus, userId, navigateToChat, truncateMiddle]
   );
 
-  const keyExtractor = useCallback((item: MemberItem) => item.clientId ?? item.id, []);
+  const keyExtractor: any = useCallback((item: MemberItem) => item.clientId ?? item.id, []);
 
   const ListHeader = useMemo(() => {
     if (!currentUser) return null;
@@ -1130,13 +1199,21 @@ export default function MembersList() {
       <MenuProvider>
         <ChatBanner />
 
-        <FingerprintBlockModal
-          visible={fpBlocked}
-          linkedEmail={fpLinkedEmail}
-          currentUserEmail={rawUserEmail ?? ""}
-          onDismiss={() => setFpBlocked(false)}
-          onLogout={handleClearSession}
-        />
+        {fpBlocked && (
+          <FingerprintBlockScreen
+            linkedEmail={fpLinkedEmail}
+            currentUserEmail={rawUserEmail ?? ""}
+            onDismiss={() => setFpBlocked(false)}
+            onLogout={handleClearSession}
+          />
+        )}
+
+        {showRelinkNotice && relinksRemaining !== null && (
+          <RelinkNotice
+            relinksRemaining={relinksRemaining}
+            onDismiss={() => setShowRelinkNotice(false)}
+          />
+        )}
 
         <AnnouncementModalComponentAppUpdate
           visible={app_update_status}
@@ -1194,13 +1271,6 @@ export default function MembersList() {
                   <Text style={earnStyles.btnText}>Vote</Text>
                 </TouchableOpacity>
               </View>
-              {/* <View>
-                <TouchableOpacity style={earnStyles.btn} onPress={() => router.navigate("./PollsListScreen")} activeOpacity={0.82}>
-                  <View style={earnStyles.shimmer} />
-                  <Ionicons name="add" size={18} color="#fff" style={{ marginRight: 7 }} />
-                  <Text style={earnStyles.btnText}>Create poll</Text>
-                </TouchableOpacity>
-              </View> */}
             </View>
 
 
