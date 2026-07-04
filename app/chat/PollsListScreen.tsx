@@ -202,6 +202,11 @@ export default function PollsListScreen() {
         []
     );
 
+    const formatDeadline = (deadline: string | null) => {
+        if (!deadline) return null;
+        return new Date(deadline).toLocaleDateString("en-GB"); // → "18/07/2026"
+    };
+
     // ── Loading ───────────────────────────────────────────────────────────────
 
     if (loading) {
@@ -228,9 +233,9 @@ export default function PollsListScreen() {
     return (
         <ReusableScreen>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}
+                <TouchableOpacity onPress={() => router.navigate("./members_list")} style={styles.backBtn}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                    <Ionicons name="arrow-back" size={20} color="#fff" />
+                    <Ionicons name="arrow-back" size={20} color="#666" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>All Polls</Text>
                 <View style={styles.headerCountPill}>
@@ -241,11 +246,11 @@ export default function PollsListScreen() {
             {/* Search bar */}
             <View style={styles.searchSection}>
                 <View style={styles.searchWrap}>
-                    <Ionicons name="search-outline" size={18} color="#8c939fff" />
+                    <Ionicons name="search-outline" size={20} color="#000" />
                     <TextInput
                         style={styles.searchInput}
                         placeholder="Search polls or creators..."
-                        placeholderTextColor="#949ba8ff"
+                        placeholderTextColor="#73767dff"
                         value={search}
                         onChangeText={setSearch}
                         returnKeyType="search"
@@ -412,13 +417,12 @@ export default function PollsListScreen() {
 
                                                             {/* Metadata */}
                                                             <View style={styles.pollMetaRow}>
-                                                                {poll.dateCreated ? (
+                                                                {poll.deadline ? (
                                                                     <Text style={styles.metaText}>
-                                                                        {formatDate(poll.dateCreated)}
+                                                                        {poll.deadline ? `Ex: ${formatDeadline(poll.deadline)}` : "No deadline"}
                                                                     </Text>
                                                                 ) : null}
 
-                                                                <View style={styles.metaDivider} />
 
                                                                 <View style={styles.metaIconGroup}>
                                                                     <Ionicons name="people" size={14} color="#6B7280" />
@@ -427,19 +431,9 @@ export default function PollsListScreen() {
                                                                     </Text>
                                                                 </View>
 
-                                                                {poll.isAnonymous && (
-                                                                    <>
-                                                                        <View style={styles.metaDivider} />
-                                                                        <View style={styles.metaIconGroup}>
-                                                                            <Ionicons name="eye-off" size={14} color="#6B7280" />
-                                                                            <Text style={styles.metaText}>Anon</Text>
-                                                                        </View>
-                                                                    </>
-                                                                )}
 
                                                                 {poll.pollType === "multiple" && (
                                                                     <>
-                                                                        <View style={styles.metaDivider} />
                                                                         <View style={styles.metaIconGroup}>
                                                                             <Ionicons name="layers" size={14} color="#6B7280" />
                                                                             <Text style={styles.metaText}>Multi</Text>
@@ -507,7 +501,7 @@ const styles = StyleSheet.create({
     },
     backBtn: {
         width: 36, height: 36, borderRadius: 18,
-        backgroundColor: "#0fb760ff", alignItems: "center", justifyContent: "center",
+        backgroundColor: "#e4e4e7ff", alignItems: "center", justifyContent: "center",
     },
     headerTitle: { fontSize: 18, fontWeight: "700", color: "#111827", letterSpacing: -0.3 },
     headerCountPill: {
@@ -524,7 +518,7 @@ const styles = StyleSheet.create({
     },
     searchWrap: {
         flexDirection: "row", alignItems: "center", gap: 8,
-        backgroundColor: "#f1f1f4ff", borderRadius: 20,
+        backgroundColor: "#eaeaf6ff", borderRadius: 20,
         marginHorizontal: 16, marginTop: 12,
         paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 12 : 10,
         marginBottom: 8,
@@ -572,8 +566,8 @@ const styles = StyleSheet.create({
     groupCard: {
         backgroundColor: "#FFFFFF",
         borderRadius: 16,
-        borderWidth: 1,
-        borderColor: "#E5E7EB",
+        borderWidth: 2,
+        borderColor: "#ccd3cbff",
         overflow: "hidden",
     },
     creatorHeader: {
@@ -668,7 +662,6 @@ const styles = StyleSheet.create({
     },
     metaIconGroup: { flexDirection: "row", alignItems: "center", gap: 4 },
     metaText: { fontSize: 13, color: "#6B7280", fontWeight: "500" },
-    metaDivider: { width: 4, height: 4, borderRadius: 2, backgroundColor: "#D1D5DB" },
 
     pollFooter: {
         flexDirection: "row", alignItems: "center", justifyContent: "space-between",

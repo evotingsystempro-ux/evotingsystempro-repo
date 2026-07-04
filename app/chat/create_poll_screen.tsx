@@ -528,7 +528,7 @@ export default function CreatePollScreen() {
 
       if (parsed.length === 0) {
         setFileParseError(
-          "No valid rows found. Each row needs a name, a code/index number, and a valid email — separated by commas."
+          "Each row needs a name, valid email or code separated by commas. e.g. `John Doe,johndoe@example.com`"
         );
       } else {
         setUploadedVoters(parsed);

@@ -90,7 +90,6 @@ ASPIRANTS_DETAILS_DB
                     ├── creatorEmail: string
                     └── addedAt: timestamp
 
-
 VOTERS_DB
   └── {voterEmail}
         └── {pollId}/

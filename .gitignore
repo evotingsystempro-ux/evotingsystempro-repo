@@ -42,8 +42,8 @@ yarn-error.*
 # secrets & large datasets
 GoogleService-Info.plist
 DATASET
-google-services.json
+#google-services.json
 DATASET/google-services.json
-serviceAccountKey.json
+#serviceAccountKey.json
 
 .env

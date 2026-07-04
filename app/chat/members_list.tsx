@@ -701,10 +701,10 @@ const Header = React.memo(function Header({
         </TouchableOpacity> */}
 
         <View style={headerStyles.searchWrap}>
-          <Ionicons name="search-outline" size={21} color="#9ca3af" style={headerStyles.searchIcon} />
+          <Ionicons name="search-outline" size={22} color="#000" style={headerStyles.searchIcon} />
           <TextInput
-            placeholder="Search…"
-            placeholderTextColor="#9ca3af"
+            placeholder="Search potential voters…"
+            placeholderTextColor="#5d626aff"
             maxLength={25}
             style={headerStyles.searchInput}
             value={searchText}
@@ -745,7 +745,7 @@ const headerStyles = StyleSheet.create({
   creditBtn: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#ef4444", borderRadius: 20, paddingVertical: 5, paddingHorizontal: 10, paddingRight: 12 },
   helpBtn: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#f59e0b", borderRadius: 20, paddingVertical: 5, paddingHorizontal: 12, paddingRight: 15 },
   actionBtnText: { color: "#fff", fontWeight: "600", fontSize: 14 },
-  searchWrap: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 20, backgroundColor: "#edeff0ff", paddingHorizontal: 8, paddingVertical: 4, width: "96%" },
+  searchWrap: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 20, backgroundColor: "#eaeaf6ff", paddingHorizontal: 8, paddingVertical: 4, width: "96%" },
   searchIcon: { marginRight: 3 },
   searchInput: { flex: 1, fontSize: 13, color: "#333", paddingVertical: 5, minWidth: 0, ...(Platform.OS === "web" && { outlineStyle: "none", outlineWidth: 0 } as any) },
   clearBtn: { padding: 2 },

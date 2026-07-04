@@ -74,7 +74,7 @@ export default function IndexScreen() {
           },
         ]}
       >
-        <Ionicons name="shield-checkmark-sharp" size={80} color="#2eae34ff" />
+        <Ionicons name="shield-checkmark-sharp" size={120} color="#2eae34ff" />
         <Text style={styles.appName}>Loading App...</Text>
       </Animated.View>
     </View>
