@@ -2,37 +2,66 @@
 
 > Secure · Transparent · Precise
 
+[![Live App](https://img.shields.io/badge/Live%20App-evotingsystempro.expo.app-4F46E5?style=for-the-badge)](https://evotingsystempro.expo.app)
+[![GitHub](https://img.shields.io/badge/GitHub-evotingsystempro-181717?style=for-the-badge&logo=github)](https://github.com/evotingsystempro)
+[![Watch Demo](https://img.shields.io/badge/Watch-Demo%20Video-EA4335?style=for-the-badge&logo=googledrive&logoColor=white)](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c)
+
 ---
 
-### Project Overview
+## Project Overview
 
-**eVoting System Pro** is a digital voting platform built with **React Native (Expo)** and **Firebase**. It allows organizers to create and run secure, verifiable polls and elections — from single-choice leadership votes to multi-candidate committee elections — with real-time results and built-in fraud prevention.
+**eVoting System Pro** is a digital voting platform built with **React Native (Expo)** and **Firebase**. It enables organizers to create and run secure, verifiable polls and elections — from single-choice leadership votes to multi-candidate committee elections — with real-time results and built-in fraud prevention.
+
+**Quick links:**
+
+| Resource      | Link                                                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🌐 Live App   | [evotingsystempro.expo.app](https://evotingsystempro.expo.app)                                                                                                                                                |
+| 💻 GitHub     | [github.com/evotingsystempro](https://github.com/evotingsystempro)                                                                                                                                            |
+| 🎥 Demo Video | [Watch the hackathon demo](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c) |
+
+---
+
+## 📱 Screenshots
+
+|                                                            |                                                                   |                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| ![Google Sign-In](./screenshots/01-login.png)              | ![Platform Features](./screenshots/02-platform-features.png)      | ![All Polls](./screenshots/03-all-polls.png)                 |
+| **Google Sign-In** — Secure onboarding                     | **Platform Features** — Feature walkthrough on first launch       | **All Polls** — Browse live, active, and closed polls        |
+| ![Poll Results](./screenshots/04-poll-results.png)         | ![Wallet](./screenshots/05-wallet.png)                            | ![Create a Poll](./screenshots/06-create-poll.png)           |
+| **Live Poll Results** — Real-time vote counts and rankings | **Wallet** — Crypto wallet, deposits, withdrawals & P2P transfers | **Create a Poll** — Configure poll type, aspirants & details |
+
+> 🎥 Prefer a walkthrough? Check out the **[demo video](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c)** above.
+>
+> 📁 Full screenshot gallery: **[Firebase Storage — eVotingSystemPro-Screen-Shots](https://console.firebase.google.com/project/evotingsystempro-788f7/storage/evotingsystempro-788f7.firebasestorage.app/files/~2FeVoting_System_Pro~2FeVotingSystemPro-Screen-Shots)**
 
 ---
 
 ## 🎯 Core Features
 
-- 🔘 **Single-Choice Polls** — Voters select exactly one candidate. Ideal for elections, leadership votes, and referendums.
-- ☑️ **Multiple-Choice Polls** — Voters select multiple candidates in one poll. Ideal for committee elections and ranked preference voting.
-- 💳 **Pay-Per-Vote** — Charge a fee per vote, collected via Mobile Money, Card, or Crypto before a vote is cast.
-- 📄 **Import Eligible Voters** — Upload a CSV, Excel, or text file of eligible voters so only registered participants can vote.
-- ⏰ **Scheduled Voting Windows** — Set a precise start and end time; voting opens and closes automatically.
-- 📊 **Real-Time Results** — Live charts and counters update instantly as votes are cast and verified.
-- 🛡️ **Fraud Prevention & Security** — Device fingerprinting and server-side verification block duplicate votes, bots, and manipulation attempts.
-- 👥 **Voter Management Dashboard** — Admins can view registered voters, track who has voted, and manage eligibility in real time.
-- 🔔 **Push Notification Alerts** — Voters are notified when a poll opens, closes, or results are published.
-- 📥 **Export Results** — Download final results as a PDF or Excel report for record-keeping, auditing, or public announcement.
+| Feature                            | Description                                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 🔘 **Single-Choice Polls**         | Voters select exactly one candidate — ideal for elections, leadership votes, and referendums.               |
+| ☑️ **Multiple-Choice Polls**       | Voters select multiple candidates in one poll — ideal for committee elections and ranked preference voting. |
+| 💳 **Pay-Per-Vote**                | Charge a fee per vote, collected via Mobile Money, Card, or Crypto before a vote is cast.                   |
+| 📄 **Import Eligible Voters**      | Upload a CSV, Excel, or text file of eligible voters so only registered participants can vote.              |
+| ⏰ **Scheduled Voting Windows**    | Set a precise start and end time; voting opens and closes automatically.                                    |
+| 📊 **Real-Time Results**           | Live charts and counters update instantly as votes are cast and verified.                                   |
+| 🛡️ **Fraud Prevention & Security** | Device fingerprinting and server-side verification block duplicate votes, bots, and manipulation attempts.  |
+| 👥 **Voter Management Dashboard**  | Admins can view registered voters, track who has voted, and manage eligibility in real time.                |
+| 🔔 **Push Notification Alerts**    | Voters are notified when a poll opens, closes, or results are published.                                    |
+| 📥 **Export Results**              | Download final results as a PDF or Excel report for record-keeping, auditing, or public announcement.       |
 
 ---
 
-## Key Tech Features
+## 🔧 Key Technical Capabilities
 
 - ✅ Google Authentication (Sign-Up & Login)
 - ✅ Firebase Authentication
 - ✅ JWT-based token management (for native apps)
 - ✅ Firebase Realtime Database for live presence & status tracking
-- ✅ AI-powered Customer Support System
-- ✅ Real-Time Chat System
+- ✅ AI-powered customer support system
+- ✅ Real-time chat system
 - ✅ Real-time online/offline presence detection (`onDisconnect` / `onValue`)
 - ✅ Push notifications via Expo Notifications
 - ✅ Persistent local session caching with `AsyncStorage`
@@ -43,7 +72,7 @@
 
 ---
 
-## Project Structure
+## 🗂️ Data Architecture
 
 ```
 CREATOR_DB
@@ -90,6 +119,7 @@ ASPIRANTS_DETAILS_DB
                     ├── creatorEmail: string
                     └── addedAt: timestamp
 
+
 VOTERS_DB
   └── {voterEmail}
         └── {pollId}/
@@ -98,7 +128,6 @@ VOTERS_DB
                     ├── creatorEmail: string
                     ├── aspirantVoted: string | string[]
                     └── votedAt: timestamp
-
 ```
 
 ---
@@ -118,15 +147,22 @@ Create a `.env` file in the root directory with your Firebase project credential
 
 ---
 
-## ▶️ Get Started
+## ▶️ Getting Started
 
-1. **Install dependencies:**
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/evotingsystempro
+   cd evotingsystempro
+   ```
+
+2. **Install dependencies**
 
    ```bash
    bun install
    ```
 
-2. **Run the app:**
+3. **Run the app**
 
    ```bash
    npx expo start          # Start Expo dev server
@@ -135,7 +171,7 @@ Create a `.env` file in the root directory with your Firebase project credential
    expo start --web        # Web browser
    ```
 
-3. **Build for production:**
+4. **Build for production**
 
    ```bash
    eas build --platform ios --profile production
@@ -155,6 +191,14 @@ Create a `.env` file in the root directory with your Firebase project credential
 | Auth          | Firebase Authentication    |
 | Notifications | Expo Push Notifications    |
 | Local Storage | AsyncStorage               |
+
+---
+
+## 📺 Demo & Resources
+
+- 🎥 **[Hackathon Demo Video](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c)** — See the platform in action.
+- 💻 **[GitHub Organization](https://github.com/evotingsystempro)** — Source code and repositories.
+- 🌐 **[Live Application](https://evotingsystempro.expo.app)** — Try eVoting System Pro in your browser.
 
 ---
 
