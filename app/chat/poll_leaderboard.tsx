@@ -486,10 +486,6 @@ export default function PollLeaderboardScreen() {
         return (
             <ReusableScreen>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={() => router.navigate("./PollsListScreen")} style={styles.backBtn}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                        <Ionicons name="arrow-back" size={18} color="#1F9F4E" />
-                    </TouchableOpacity>
                     <Text style={styles.headerTitle}>Leaderboard</Text>
                     <View style={{ width: 32 }} />
                 </View>
@@ -611,8 +607,7 @@ export default function PollLeaderboardScreen() {
                 )}
                 {poll.deadline && (
                     <View style={styles.metaChip}>
-                        <Ionicons name="time-outline" size={18} color="#6b7280" />
-                        <Text style={styles.metaChipText}>Voting ends: </Text>
+                        <Text style={styles.metaChipText}>, End date: </Text>
                         <Text style={styles.deadlinePill}>{formatDeadline(poll.deadline)}</Text>
                     </View>
                 )}

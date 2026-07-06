@@ -727,7 +727,7 @@ const styles = StyleSheet.create({
     liveBadgeText: { fontSize: 12, fontWeight: "700", color: "#046C4E" },
 
     scroll: { flex: 1, backgroundColor: "#e5ece3ff" },
-    scrollContent: { paddingHorizontal: 10, paddingTop: 5, paddingBottom: 10, gap: 6 },
+    scrollContent: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10, gap: 6 },
     scrollEmpty: { flex: 1 },
 
     emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 16 },

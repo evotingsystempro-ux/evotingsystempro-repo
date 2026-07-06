@@ -568,7 +568,7 @@ export default function MembersList() {
     [clientsOnlineStatus, userId, navigateToChat, truncateMiddle]
   );
 
-  const keyExtractor = useCallback((item: MemberItem) => item.clientId ?? item.id, []);
+  const keyExtractor: any = useCallback((item: MemberItem) => item.clientId ?? item.id, []);
 
   const ListHeader = useMemo(() => {
     if (!currentUser) return null;
