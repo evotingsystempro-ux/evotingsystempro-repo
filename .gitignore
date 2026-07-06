@@ -40,10 +40,7 @@ yarn-error.*
 *.tsbuildinfo
 
 # secrets & large datasets
-GoogleService-Info.plist
-DATASET
 #google-services.json
-DATASET/google-services.json
 #serviceAccountKey.json
 
 .env

@@ -129,7 +129,7 @@ export default function LoginScreen() {
   if (isLoading) {
     return (
       <View style={styles.loaderContainer}>
-        <ActivityIndicator size="large" color="#F97316" />
+        <ActivityIndicator size="large" color="#1E9E4A" />
       </View>
     );
   }
@@ -148,7 +148,7 @@ export default function LoginScreen() {
               <Text style={styles.appTitle}>Smart People</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 5, alignItems: "baseline" }}>
-              <MaterialCommunityIcons name="signal-cellular-3" size={25} color="#f69502ff" />
+              <MaterialCommunityIcons name="signal-cellular-3" size={25} color="#1EA34D" />
               <Text style={styles.subtitle}>Sign In</Text>
             </View>
 
@@ -265,13 +265,13 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, justifyContent: "center", padding: 20, backgroundColor: "#faf2e6ff" },
+  container: { flexGrow: 1, justifyContent: "center", padding: 20, backgroundColor: "#eef8f1ff" },
   loaderContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: { alignItems: "center", marginBottom: 5, gap: 10 },
   logo: { width: 70, height: 70 },
   logoGoogle: { width: 25, height: 25 },
-  appTitle: { fontSize: 25, fontWeight: "800", color: "#F97316", marginTop: 10 },
-  subtitle: { fontSize: 22, color: "#f69502ff", fontWeight: "800" },
+  appTitle: { fontSize: 25, fontWeight: "800", color: "#17A34A", marginTop: 10 },
+  subtitle: { fontSize: 22, color: "#1EA34D", fontWeight: "800" },
   formContainer: { marginVertical: 20, marginHorizontal: 5, },
   inputWrapper: {
     flexDirection: "row",
@@ -281,7 +281,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 3,
     borderWidth: 1.5,
-    borderColor: "#f7d6b0ff",
+    borderColor: "#c3ecceff",
     marginBottom: 5,
     shadowColor: "#000",
     shadowOpacity: 0.05,
@@ -306,11 +306,11 @@ const styles = StyleSheet.create({
   },
 
   errorText: { color: "#FF3B30", textAlign: "center", marginBottom: 10 },
-  loginButton: { backgroundColor: "#f5931bff", paddingVertical: 13, borderRadius: 10, alignItems: "center", marginBottom: 10, marginTop: 10 },
+  loginButton: { backgroundColor: "#22A35Dff", paddingVertical: 13, borderRadius: 10, alignItems: "center", marginBottom: 10, marginTop: 10 },
   loginText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
   inlineContainer: { flexDirection: "row", justifyContent: "center", marginTop: 10, alignItems: "center" },
   subText: { fontSize: 17, marginRight: 5 },
-  link: { fontSize: 18, color: "#F97316", fontWeight: "bold" },
+  link: { fontSize: 18, color: "#17A34A", fontWeight: "bold" },
 
 
   socialSection: {
@@ -339,7 +339,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#f9e0c2ff",
+    borderColor: "#cdebd7ff",
     flexDirection: "row",
     gap: 6,
 
@@ -374,7 +374,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 13,
     fontWeight: "700",
-    color: "#F97316",
+    color: "#17A34A",
   },
 
 

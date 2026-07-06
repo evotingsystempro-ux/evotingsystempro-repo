@@ -21,7 +21,7 @@ import * as Updates from "expo-updates";
 import { UserStorageKeys } from "@/hooks/storageKeys";
 
 //const SERVER_URL = "https://email-service-405496305969.us-central1.run.app";
-const SERVER_URL = "https://email-service-376826674474.us-central1.run.app";
+const SERVER_URL = "https://email-service-570014654568.us-central1.run.app";
 
 type Params = {
   username?: string;
@@ -262,7 +262,7 @@ export default function VerificationScreen() {
                 <View></View><Text style={styles.title}>Verify Your Email</Text>
                 <Text style={styles.subtitle}>Wait for the short code...</Text>
               </View>
-              <View style={{ flexDirection: "column", alignItems: "center", borderWidth: 1, borderColor: "orange", paddingHorizontal: 25, paddingVertical: 20 }}>
+              <View style={{ flexDirection: "column", alignItems: "center", borderWidth: 1, borderColor: "green", paddingHorizontal: 25, paddingVertical: 20 }}>
                 <Text style={styles.enterCodeSent}>Enter the code sent to</Text>
                 <Text style={{ fontWeight: "bold" }}>{email}</Text>
               </View>
@@ -295,7 +295,7 @@ export default function VerificationScreen() {
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
-                  style={[styles.button, { backgroundColor: "#f19c34ff" }]}
+                  style={[styles.button, { backgroundColor: "#3FAE5Cff" }]}
                   onPress={resendCode}
                   disabled={loading}
                 >
@@ -332,7 +332,7 @@ export default function VerificationScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#faf2e6ff",
+    backgroundColor: "#eef8f1ff",
     paddingHorizontal: 20,
     justifyContent: "center",
   },
@@ -348,7 +348,7 @@ const styles = StyleSheet.create({
   appName: {
     fontSize: 30,
     fontWeight: "bold",
-    color: "#F97316",
+    color: "#17A34A",
     marginTop: 15,
   },
   title: {
@@ -370,7 +370,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 5,
     fontWeight: "800",
-    color: "#f68b09ff",
+    color: "#1E9E4Aff",
   },
   inputWrapper: {
     flexDirection: "row",
@@ -383,7 +383,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 40,
     height: 50,
     borderWidth: 2,
-    borderColor: "#fce1b8ff",
+    borderColor: "#cdebd7ff",
     shadowColor: "#fff",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
@@ -464,7 +464,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 13,
     fontWeight: "700",
-    color: "#F97316",
+    color: "#17A34A",
   },
 });
-

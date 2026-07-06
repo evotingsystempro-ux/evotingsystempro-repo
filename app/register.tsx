@@ -22,7 +22,7 @@ import ReusableScreen from "@/components/ReusableScreen";
 import { GlobalContext } from "@/context";
 
 //const SERVER_URL = "http://10.15.20.68:8080";
-const SERVER_URL = "https://email-service-376826674474.us-central1.run.app";
+const SERVER_URL = "https://email-service-570014654568.us-central1.run.app";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -144,7 +144,7 @@ export default function RegisterScreen() {
               <Text style={styles.appTitle}>Smart People</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 5, alignItems: "center" }}>
-              <MaterialCommunityIcons name="account-circle" size={35} color="#f69502ff" />
+              <MaterialCommunityIcons name="account-circle" size={35} color="#1EA34D" />
               <Text style={styles.subtitle}>Create your account</Text>
             </View>
           </View>
@@ -279,14 +279,14 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     padding: 24,
-    backgroundColor: "#faf2e6ff",
+    backgroundColor: "#eef8f1ff",
   },
 
   logoGoogle: { width: 25, height: 25 },
   logoContainer: {
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: "orange",
+    shadowColor: "green",
     shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 4,
@@ -295,11 +295,11 @@ const styles = StyleSheet.create({
   appTitle: {
     fontSize: 25,
     fontWeight: "800",
-    color: "#F97316",
+    color: "#17A34A",
     marginTop: 15,
   },
   subtitle: {
-    color: "#f69502ff",
+    color: "#1EA34D",
     fontSize: 20,
     marginTop: 4,
     textAlign: "center", fontWeight: "800"
@@ -315,7 +315,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 3,
     borderWidth: 1.5,
-    borderColor: "#f7d6b0ff",
+    borderColor: "#c3ecceff",
     marginBottom: 5,
     shadowColor: "#000",
     shadowOpacity: 0.05,
@@ -348,12 +348,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   registerButton: {
-    backgroundColor: "#f5931bff",
+    backgroundColor: "#22A35Dff",
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: "center",
     marginTop: 10,
-    shadowColor: "#EA580C",
+    shadowColor: "#15803D",
     shadowOpacity: 0.25,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
@@ -370,7 +370,7 @@ const styles = StyleSheet.create({
   },
   subText: { fontSize: 17, color: "#78350F" },
   link: {
-    color: "#F97316",
+    color: "#17A34A",
     fontWeight: "700",
     marginLeft: 6, fontSize: 18,
   },
@@ -409,7 +409,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#f9e0c2ff",
+    borderColor: "#cdebd7ff",
     flexDirection: "row",
     gap: 6,
 
@@ -445,7 +445,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 13,
     fontWeight: "700",
-    color: "#F97316",
+    color: "#17A34A",
   },
   eyeButton: {
     position: "absolute",

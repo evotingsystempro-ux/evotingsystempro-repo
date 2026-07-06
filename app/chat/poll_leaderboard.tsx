@@ -321,7 +321,7 @@ export default function PollLeaderboardScreen() {
 
         if (poll.requires_voters_validation === true && !isVoterValidated) {
             setLockedIndices(new Set());
-            setWait_checking_voter_validation("You can't vote");
+            setWait_checking_voter_validation("You can't vote in this poll");
             setLockedIndices(prev => new Set(prev).add(index));
             return;
         }
@@ -520,7 +520,6 @@ export default function PollLeaderboardScreen() {
                 <TouchableOpacity
                     onPress={() => router.navigate("./PollsListScreen")}
                     style={styles.backBtn}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
                     <Ionicons name="arrow-back" size={18} color="#fff" />
                 </TouchableOpacity>
@@ -550,6 +549,109 @@ export default function PollLeaderboardScreen() {
 
             </View>
 
+            {/* Status row */}
+            <View style={styles.statusRow}>
+                <View style={[styles.statusBadge, closed ? styles.badgeClosed : styles.badgeActive]}>
+                    <View style={[styles.statusDot, closed ? styles.dotClosed : styles.dotActive]} />
+                    <Text style={[styles.statusText, closed ? styles.statusTextClosed : styles.statusTextActive]}>
+                        {closed ? (expired ? "Expired" : "Closed") : "Live"}
+                    </Text>
+                </View>
+
+                {poll.requires_voters_validation === true ? (
+                    <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        <MaterialIcons name="verified" size={12} color="#3abf1fff" />
+                        <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
+                            VIP Voters only
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={{ paddingHorizontal: 9, paddingVertical: 2, borderRadius: 20, backgroundColor: "#e4ece0ff", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        <Ionicons name="globe-outline" size={12} color="#179a0bff" />
+                        <Text style={{ color: "#217614ff", fontSize: 13, fontWeight: "600" }}>
+                            Open to all
+                        </Text>
+                    </View>
+                )}
+
+                {poll.poll_verification_status === "verified" ? (
+                    <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        <MaterialIcons name="verified" size={12} color="#3abf1fff" />
+                        <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
+                            Verified Poll
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={{ paddingHorizontal: 9, paddingVertical: 2, borderRadius: 20, backgroundColor: "#fee2e2", flexDirection: "row", alignItems: "center", gap: 4 }}>
+                        <MaterialIcons name="cancel" size={12} color="#ef4444" />
+                        <Text style={{ color: "#ef4444", fontSize: 12, fontWeight: "500" }}>
+                            Unverified Poll
+                        </Text>
+                    </View>
+                )}
+
+
+                <View style={styles.metaChip}>
+                    <MaterialIcons name="how-to-vote" size={18} color="#6b7280" />
+                    <Text style={styles.metaChipText}>{total} vote{total !== 1 ? "s" : ""}</Text>
+                </View>
+                <View style={styles.metaChip}>
+                    <Ionicons name="people-outline" size={18} color="#6b7280" />
+                    <Text style={styles.metaChipText}>
+                        {aspirants.length} aspirant{aspirants.length !== 1 ? "s" : ""}
+                    </Text>
+                </View>
+                {poll.pollType === "multiple" && myTotalVotesCast > 0 && (
+                    <View style={styles.metaChip}>
+                        <Ionicons name="person-outline" size={14} color="#6b7280" />
+                        <Text style={styles.metaChipText}>
+                            You've cast {myTotalVotesCast} vote{myTotalVotesCast !== 1 ? "s" : ""}
+                        </Text>
+                    </View>
+                )}
+                {poll.deadline && (
+                    <View style={styles.metaChip}>
+                        <Ionicons name="time-outline" size={18} color="#6b7280" />
+                        <Text style={styles.metaChipText}>Voting ends: </Text>
+                        <Text style={styles.deadlinePill}>{formatDeadline(poll.deadline)}</Text>
+                    </View>
+                )}
+
+
+            </View>
+
+
+            {!alreadyVoted && poll.pollType === "single" && (
+                <View style={styles.noticeRow}>
+                    <Ionicons name="checkmark-circle" size={22} color="#1F9F4E" />
+                    <Text style={styles.noticeText}>
+                        Cast your vote now! You have 30s to change your vote after voting.
+                    </Text>
+                </View>
+            )}
+
+            {alreadyVoted && poll.pollType === "single" ? (
+                <View style={styles.noticeRow}>
+                    <Ionicons name="checkmark-circle" size={22} color="#1F9F4E" />
+                    <Text style={styles.noticeText}>
+                        {votedAt && (Date.now() - votedAt.getTime()) / 1000 <= 30
+                            ? `You have ${Math.max(0, 30 - Math.floor((Date.now() - votedAt.getTime()) / 1000))}s left to change your vote.`
+                            : "Your vote is now locked and cannot be changed."}
+                    </Text>
+                </View>
+            ) :
+                poll.pollType != "single" && (
+                    <View style={styles.noticeRow}>
+                        <Ionicons name="checkmark-circle" size={25} color="#1F9F4E" />
+                        <Text style={styles.noticeText}>1 vote = GHS 1.00, vote more for your aspirant to win. Load your wallet now</Text>
+                    </View>
+                )
+
+            }
+
+
+
+
             <View style={styles.body}>
                 <ScrollView
                     style={styles.scroll}
@@ -560,104 +662,9 @@ export default function PollLeaderboardScreen() {
                             tintColor="#1F9F4E" colors={["#1F9F4E"]} />
                     }
                 >
-                    {/* Status row */}
-                    <View style={styles.statusRow}>
-                        <View style={[styles.statusBadge, closed ? styles.badgeClosed : styles.badgeActive]}>
-                            <View style={[styles.statusDot, closed ? styles.dotClosed : styles.dotActive]} />
-                            <Text style={[styles.statusText, closed ? styles.statusTextClosed : styles.statusTextActive]}>
-                                {closed ? (expired ? "Expired" : "Closed") : "Live"}
-                            </Text>
-                        </View>
-
-                        {poll.requires_voters_validation === true ? (
-                            <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <MaterialIcons name="verified" size={12} color="#3abf1fff" />
-                                <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
-                                    VIP Voters only
-                                </Text>
-                            </View>
-                        ) : (
-                            <View style={{ paddingHorizontal: 9, paddingVertical: 2, borderRadius: 20, backgroundColor: "#fee2e2", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <MaterialIcons name="cancel" size={12} color="#ef4444" />
-                                <Text style={{ color: "#e644efff", fontSize: 12, fontWeight: "500" }}>
-                                    Open to all
-                                </Text>
-                            </View>
-                        )}
-
-                        {poll.poll_verification_status === "verified" ? (
-                            <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <MaterialIcons name="verified" size={12} color="#3abf1fff" />
-                                <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
-                                    Verified
-                                </Text>
-                            </View>
-                        ) : (
-                            <View style={{ paddingHorizontal: 9, paddingVertical: 2, borderRadius: 20, backgroundColor: "#fee2e2", flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <MaterialIcons name="cancel" size={12} color="#ef4444" />
-                                <Text style={{ color: "#ef4444", fontSize: 12, fontWeight: "500" }}>
-                                    Not Verified
-                                </Text>
-                            </View>
-                        )}
 
 
-                        <View style={styles.metaChip}>
-                            <MaterialIcons name="how-to-vote" size={18} color="#6b7280" />
-                            <Text style={styles.metaChipText}>{total} vote{total !== 1 ? "s" : ""}</Text>
-                        </View>
-                        <View style={styles.metaChip}>
-                            <Ionicons name="people-outline" size={18} color="#6b7280" />
-                            <Text style={styles.metaChipText}>
-                                {aspirants.length} aspirant{aspirants.length !== 1 ? "s" : ""}
-                            </Text>
-                        </View>
-                        {poll.pollType === "multiple" && myTotalVotesCast > 0 && (
-                            <View style={styles.metaChip}>
-                                <Ionicons name="person-outline" size={14} color="#6b7280" />
-                                <Text style={styles.metaChipText}>
-                                    You've cast {myTotalVotesCast} vote{myTotalVotesCast !== 1 ? "s" : ""}
-                                </Text>
-                            </View>
-                        )}
-                        {poll.deadline && (
-                            <View style={styles.metaChip}>
-                                <Ionicons name="time-outline" size={18} color="#6b7280" />
-                                <Text style={styles.metaChipText}>Voting ends: </Text>
-                                <Text style={styles.deadlinePill}>{formatDeadline(poll.deadline)}</Text>
-                            </View>
-                        )}
 
-
-                    </View>
-
-                    {!alreadyVoted && poll.pollType === "single" && (
-                        <View style={styles.noticeRow}>
-                            <Ionicons name="checkmark-circle" size={22} color="#1F9F4E" />
-                            <Text style={styles.noticeText}>
-                                Cast your vote now! You have 30s to change your vote after voting.
-                            </Text>
-                        </View>
-                    )}
-
-                    {alreadyVoted && poll.pollType === "single" ? (
-                        <View style={styles.noticeRow}>
-                            <Ionicons name="checkmark-circle" size={22} color="#1F9F4E" />
-                            <Text style={styles.noticeText}>
-                                {votedAt && (Date.now() - votedAt.getTime()) / 1000 <= 30
-                                    ? `You have ${Math.max(0, 30 - Math.floor((Date.now() - votedAt.getTime()) / 1000))}s left to change your vote.`
-                                    : "Your vote is now locked and cannot be changed."}
-                            </Text>
-                        </View>
-                    ) :
-                        poll.pollType != "single" && (
-                            <View style={styles.noticeRow}>
-                                <Ionicons name="checkmark-circle" size={25} color="#1F9F4E" />
-                                <Text style={styles.noticeText}>1 vote = GHS 1.00, vote more for your aspirant to win. Load your wallet now</Text>
-                            </View>
-                        )
-
-                    }
 
                     {/* Aspirant cards */}
                     {sorted.length === 0 ? (
@@ -681,18 +688,31 @@ export default function PollLeaderboardScreen() {
                                         {/* Top row */}
                                         <View style={styles.cardTopRow}>
 
+                                            <View>
+                                                <Image
+                                                    source={require("@/assets/images/userImagePlaceHolder.png")}
+                                                    style={styles.avatarPlaceholder}
+                                                    resizeMode="contain"
+                                                />
+                                                {asp.photo && asp.photo.length > 10 ? (
 
-                                            {asp.photo && asp.photo.length > 10 ? (
-                                                <View style={{ width: 45, height: 45 }}>
-                                                    <Image source={{ uri: asp.photo }} style={styles.avatarImage} resizeMode="cover" />
-                                                </View>
-                                            ) : (
-                                                <View style={[styles.avatar, { backgroundColor: asp.photo || avatarColor }]}>
-                                                    <Text style={styles.avatarText}>
-                                                        {asp.name?.charAt(0).toUpperCase() ?? '?'}
-                                                    </Text>
-                                                </View>
-                                            )}
+
+                                                    <View style={styles.pollLogoWrapper}>
+                                                        <Image
+                                                            source={{ uri: asp.photo }}
+                                                            style={styles.pollLogoInner}
+                                                            resizeMode="cover"
+                                                        />
+                                                    </View>
+                                                ) : (
+                                                    <View style={[styles.avatar, { backgroundColor: asp.photo || avatarColor }]}>
+                                                        <Text style={styles.avatarText}>
+                                                            {asp.name?.charAt(0).toUpperCase() ?? '?'}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+
 
 
 
@@ -716,8 +736,8 @@ export default function PollLeaderboardScreen() {
                                                 <View><Text style={styles.pointsLabel}>Votes</Text></View>
                                             </View>
 
-                                            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 2 }}>
-                                                <View>
+                                            <View style={{ flexDirection: "row", alignItems: "center", }}>
+                                                <View style={{ flexDirection: "row", alignItems: "center", width: 100, justifyContent: "flex-end" }}>
                                                     {isVoted && (
                                                         <Text style={[styles.alreadyVotedText, { color: wait_checking_voter_validation === "Vote successful" ? "#1F9F4E" : "#ef4444" }]}>{wait_checking_voter_validation}</Text>
                                                     )}
@@ -829,13 +849,13 @@ const styles = StyleSheet.create({
     },
 
 
-    body: { flex: 1, backgroundColor: "#fff", margin: 2, borderRadius: 12, overflow: "hidden" },
-    scroll: { flex: 1, backgroundColor: "#deead9ff", margin: 5 },
-    scrollContent: { paddingBottom: 10 },
+    body: { flex: 1, backgroundColor: "#fff", marginHorizontal: 12, marginBottom: 3, borderRadius: 12, overflow: "hidden" },
+    scroll: { flex: 1 },
+    scrollContent: { paddingBottom: 5, paddingTop: 3, backgroundColor: "#deead9ff", borderRadius: 12, overflow: "hidden" },
 
     statusRow: {
-        flexDirection: "row", alignItems: "center", gap: 2, flexWrap: "wrap",
-        paddingHorizontal: 8, paddingVertical: 10, backgroundColor: "#fff",
+        flexDirection: "row", gap: 2, flexWrap: "wrap",
+        paddingHorizontal: 18, paddingBottom: 4, paddingTop: 10, backgroundColor: "#fff",
     },
     statusBadge: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20 },
     badgeActive: { backgroundColor: "#EAF6EE" },
@@ -859,7 +879,7 @@ const styles = StyleSheet.create({
     cardsWrap: { paddingHorizontal: 0 },
 
     card: {
-        backgroundColor: "#fff", borderRadius: 12, padding: 14, marginVertical: 2, marginHorizontal: 5,
+        backgroundColor: "#fff", borderRadius: 12, padding: 10, marginVertical: 2, marginHorizontal: 5,
         borderWidth: 1, borderColor: "#ddd", marginBottom: 2,
     },
     cardTopRow: { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -916,6 +936,7 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: "#ef4444",
         fontWeight: "600",
+        textAlign: "right",
     },
 
 
@@ -940,7 +961,7 @@ const styles = StyleSheet.create({
         alignItems: "flex-start",
         marginHorizontal: 16,
         paddingTop: Platform.select({ ios: 12, android: 16, default: 20 }),
-        borderBottomWidth: 1, borderColor: "#ddd", paddingBottom: 8,
+        borderBottomWidth: 1, borderColor: "#ddd", paddingBottom: 5,
     },
     titleBlock: {
         flex: 1,
@@ -952,14 +973,14 @@ const styles = StyleSheet.create({
         width: 32, // matches backBtn's width exactly
     },
     pollTypeBadge: {
-        backgroundColor: "#c6f3eaff",
         paddingHorizontal: 10,
         paddingVertical: 2,
         borderRadius: 10,
     },
     pollTypeBadgeText: {
-        color: "#14715eff",
-        fontSize: 13,
+        color: "#0c6c59ff",
+        fontSize: 14,
+        fontWeight: "800",
     },
 
     // footerMeta: replace the old version with this
@@ -975,4 +996,24 @@ const styles = StyleSheet.create({
 
 
     avatarImage: { width: "100%", height: "100%", borderRadius: 25 },
+    avatarPlaceholder: { width: "70%", height: "70%", position: "absolute" },
+
+
+
+    pollLogoWrapper: {
+        width: 52,
+        height: 52,
+        borderRadius: 48,
+        backgroundColor: "#F3F4F6",
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+        padding: 6,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+    },
+    pollLogoInner: {
+        width: "140%",
+        height: "140%",
+    },
 });

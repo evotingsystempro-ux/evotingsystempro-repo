@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useContext } from "react";
 import {
     View,
     Text,
@@ -12,12 +12,14 @@ import {
     LayoutAnimation,
     UIManager,
     Image,
+    Modal,
 } from "react-native";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import ReusableScreen from "@/components/ReusableScreen";
 import { db } from "@/firebase";
-import { collectionGroup, getDocs } from "firebase/firestore";
+import { collectionGroup, deleteDoc, doc, getDocs } from "firebase/firestore";
+import { GlobalContext } from "@/context";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -27,6 +29,7 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 
 interface PollSummary {
     pollId: string;
+    docPath: string; // NEW: path to the poll document in Firestore
     title: string;
     pollType: "single" | "multiple";
     status: "active" | "closed";
@@ -69,13 +72,20 @@ const avatarColorFor = (key: string) => {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function PollsListScreen() {
+    const { rawUserEmail, userId } = useContext(GlobalContext);
+    const voterEmail = userId || rawUserEmail || "unknown";
+
     const [groups, setGroups] = useState<CreatorGroup[]>([]);
     const [filtered, setFiltered] = useState<CreatorGroup[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [search, setSearch] = useState("");
+    const [searchActive, setSearchActive] = useState(false);
     const [filter, setFilter] = useState<"all" | "active" | "closed">("all");
     const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+    const icons: any = ["person-outline", "sync-outline", "close-circle-outline"];
+    const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+    const [confirmTarget, setConfirmTarget] = useState<{ docPath: string; title: string } | null>(null);
 
     // ── Fetch all poll docs via collectionGroup query ─────────────────────────
 
@@ -93,6 +103,7 @@ export default function PollsListScreen() {
 
                 const summary: PollSummary = {
                     pollId: d.pollId ?? pd.id,
+                    docPath: pd.ref.path, // NEW
                     title: d.title ?? "Untitled Poll",
                     pollType: d.pollType ?? "single",
                     status: d.status ?? "active",
@@ -189,6 +200,21 @@ export default function PollsListScreen() {
         });
     };
 
+    const openSearch = () => {
+        if (Platform.OS !== "web") {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        }
+        setSearchActive(true);
+    };
+
+    const closeSearch = () => {
+        if (Platform.OS !== "web") {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        }
+        setSearch("");
+        setSearchActive(false);
+    };
+
     const totalPolls = filtered.reduce((s, g) => s + g.polls.length, 0);
     const livePolls = filtered.reduce(
         (s, g) => s + g.polls.filter((p) => !isPollClosed(p)).length, 0
@@ -206,6 +232,41 @@ export default function PollsListScreen() {
         if (!deadline) return null;
         return new Date(deadline).toLocaleDateString("en-GB"); // → "18/07/2026"
     };
+
+    // --- DELETE POLL ---
+    const deletePoll = useCallback((docPath: string, pollTitle: string) => {
+        setConfirmTarget({ docPath, title: pollTitle });
+    }, []);
+
+    const confirmDeletePoll = useCallback(async () => {
+        if (!confirmTarget) return;
+        const { docPath } = confirmTarget;
+
+        setConfirmTarget(null); // close modal immediately
+        setDeletingIds((prev) => new Set(prev).add(docPath));
+
+        try {
+            await deleteDoc(doc(db, docPath));
+
+            setGroups((prevGroups) =>
+                prevGroups
+                    .map((g) => ({
+                        ...g,
+                        polls: g.polls.filter((p) => p.docPath !== docPath),
+                    }))
+                    .filter((g) => g.polls.length > 0)
+            );
+        } catch (err) {
+            console.error("deletePoll:", err);
+            // Optional: swap for a toast/snackbar instead of a second modal
+        } finally {
+            setDeletingIds((prev) => {
+                const next = new Set(prev);
+                next.delete(docPath);
+                return next;
+            });
+        }
+    }, [confirmTarget]);
 
     // ── Loading ───────────────────────────────────────────────────────────────
 
@@ -232,65 +293,107 @@ export default function PollsListScreen() {
 
     return (
         <ReusableScreen>
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.navigate("./members_list")} style={styles.backBtn}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                    <Ionicons name="arrow-back" size={20} color="#666" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>All Polls</Text>
-                <View style={styles.headerCountPill}>
-                    <Text style={styles.headerCountText}>{totalPolls}</Text>
-                </View>
-            </View>
+            <Modal
+                visible={!!confirmTarget}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setConfirmTarget(null)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalIconWrap}>
+                            <Ionicons name="trash" size={24} color="#EF4444" />
+                            <View>
+                                <Text style={styles.modalTitle}>Delete Poll</Text>
+                            </View>
+                        </View>
 
-            {/* Search bar */}
-            <View style={styles.searchSection}>
-                <View style={styles.searchWrap}>
-                    <Ionicons name="search-outline" size={20} color="#000" />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder="Search polls or creators..."
-                        placeholderTextColor="#73767dff"
-                        value={search}
-                        onChangeText={setSearch}
-                        returnKeyType="search"
-                        clearButtonMode="while-editing"
-                        {...(Platform.OS === "web" && { outlineStyle: "none" } as any)}
-                    />
-                    {search.length > 0 && Platform.OS !== "ios" && (
-                        <TouchableOpacity
-                            onPress={() => setSearch("")}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <Ionicons name="close-circle" size={18} color="#9CA3AF" />
-                        </TouchableOpacity>
-                    )}
-                </View>
 
-                {/* Filter tabs */}
-                <View style={styles.filterRow}>
-                    <View style={styles.filterPillGroup}>
-                        {(["all", "active", "closed"] as const).map((f) => (
+                        <View><Text style={styles.modalDesc}>
+                            Are you sure you want to delete{" "}
+                            <Text style={{ fontWeight: "700" }}>"{confirmTarget?.title}"</Text>?
+                            This cannot be undone.
+                        </Text></View>
+
+                        <View style={styles.modalActions}>
                             <TouchableOpacity
-                                key={f}
-                                style={[styles.filterTab, filter === f && styles.filterTabActive]}
-                                onPress={() => setFilter(f)}
-                                activeOpacity={0.7}
+                                style={styles.modalCancelBtn}
+                                onPress={() => setConfirmTarget(null)}
                             >
-                                <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
-                                    {f.charAt(0).toUpperCase() + f.slice(1)}
-                                </Text>
+                                <View><Text style={styles.modalCancelText}>Cancel</Text></View>
                             </TouchableOpacity>
-                        ))}
+                            <TouchableOpacity
+                                style={styles.modalDeleteBtn}
+                                onPress={confirmDeletePoll}
+                            >
+                                <View><Text style={styles.modalDeleteText}>Delete</Text></View>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                    {livePolls > 0 && filter === "all" && (
+                </View>
+            </Modal>
+            <View style={styles.header}>
+                {!searchActive ? (
+                    <>
+                        <View style={styles.headerLeftGroup}>
+                            <TouchableOpacity onPress={() => router.navigate("./members_list")} style={styles.backBtn}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                                <Ionicons name="arrow-back" size={20} color="#666" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={openSearch}
+                                style={styles.searchIconBtn}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                                <Ionicons name="search-outline" size={19} color="#374151" />
+                            </TouchableOpacity>
+
+                        </View>
+
+                        <View><Text style={[styles.headerTitle, styles.headerTitleCentered]} numberOfLines={1}>
+                            All Polls
+                        </Text></View>
+
                         <View style={styles.liveBadge}>
                             <View style={styles.liveBadgeDot} />
                             <Text style={styles.liveBadgeText}>{livePolls} Live</Text>
                         </View>
-                    )}
-                </View>
+
+                        <View style={styles.headerCountPill}>
+                            <Text style={styles.headerCountText}>{totalPolls}</Text>
+                        </View>
+                    </>
+                ) : (
+                    <View style={styles.headerSearchExpanded}>
+                        <Ionicons name="search-outline" size={20} color="#000" />
+                        <TextInput
+                            autoFocus
+                            style={styles.searchInput}
+                            placeholder="Search polls or creators..."
+                            placeholderTextColor="#73767dff"
+                            value={search}
+                            onChangeText={setSearch}
+                            returnKeyType="search"
+                            clearButtonMode="while-editing"
+                            {...(Platform.OS === "web" && { outlineStyle: "none" } as any)}
+                        />
+                        {search.length > 0 && Platform.OS !== "ios" && (
+                            <TouchableOpacity
+                                onPress={() => setSearch("")}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                                <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                            onPress={closeSearch}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            style={styles.cancelBtn}
+                        ><Text style={styles.cancelText}>Cancel</Text></TouchableOpacity>
+                    </View>
+                )}
             </View>
+
 
             {/* List */}
             <ScrollView
@@ -336,25 +439,34 @@ export default function PollsListScreen() {
                                     onPress={() => toggleGroup(group.creatorEmail)}
                                     activeOpacity={0.7}
                                 >
-                                    <View style={[styles.creatorAvatar, { backgroundColor: avatarColor }]}>
-                                        <Text style={styles.creatorAvatarText}>
-                                            {group.creatorName.charAt(0).toUpperCase()}
-                                        </Text>
-                                    </View>
 
                                     <View style={styles.creatorInfo}>
-                                        <Text style={styles.creatorName} numberOfLines={1}>
-                                            {group.creatorName}
-                                        </Text>
-                                        <Text style={styles.creatorEmail} numberOfLines={1}>
-                                            {truncateMiddle(group.creatorEmail, 15, 10)}
-                                        </Text>
+                                        <View style={{ flexDirection: "row", alignItems: "center", }}>
+
+                                            <View>
+                                                <Text style={[styles.creatorName, { textTransform: "capitalize" }]} numberOfLines={1}>
+                                                    {group.creatorName}
+                                                </Text>
+                                            </View>
+
+                                            <View>
+                                                <Text>: POLL</Text>
+                                            </View>
+
+                                        </View>
+
+                                        <View>
+                                            <Text style={styles.creatorEmail} numberOfLines={1}>
+                                                {truncateMiddle(group.creatorEmail, 15, 10)}
+                                            </Text>
+                                        </View>
+
                                     </View>
 
                                     <View style={styles.creatorRight}>
                                         {liveInGroup > 0 && <View style={styles.miniLiveDot} />}
                                         <Text style={styles.creatorPollCount}>
-                                            {group.polls.length}
+                                            {group.polls.length}{group.polls.length > 1 ? " Polls" : " Poll"}
                                         </Text>
                                         <Ionicons
                                             name={isCollapsed ? "chevron-down" : "chevron-up"}
@@ -385,11 +497,13 @@ export default function PollsListScreen() {
 
                                                         {/* Logo Thumbnail */}
                                                         {poll.logUrl ? (
-                                                            <Image
-                                                                source={{ uri: poll.logUrl }}
-                                                                style={styles.pollLogo}
-                                                                resizeMode="cover"
-                                                            />
+                                                            <View style={styles.pollLogoWrapper}>
+                                                                <Image
+                                                                    source={{ uri: poll.logUrl }}
+                                                                    style={styles.pollLogoInner}
+                                                                    resizeMode="cover"
+                                                                />
+                                                            </View>
                                                         ) : (
                                                             <View style={styles.pollLogoPlaceholder}>
                                                                 <Ionicons name="stats-chart" size={24} color="#9CA3AF" />
@@ -404,11 +518,11 @@ export default function PollsListScreen() {
                                                                 </Text>
                                                                 <View style={[
                                                                     styles.statusBadge,
-                                                                    closed ? styles.badgeClosed : styles.badgeActive,
+                                                                    closed ? styles.badgeClosed : styles.badgeActive, { backgroundColor: expired ? "#FEE2EE" : closed ? "#F3F4F6" : "#D1FAE5" }
                                                                 ]}>
                                                                     <Text style={[
                                                                         styles.badgeText,
-                                                                        closed ? styles.badgeTextClosed : styles.badgeTextActive,
+                                                                        closed ? styles.badgeTextClosed : styles.badgeTextActive, { color: expired ? "#EF4444" : "#1F9F4E" }
                                                                     ]}>
                                                                         {closed ? (expired ? "Expired" : "Closed") : "Live"}
                                                                     </Text>
@@ -455,24 +569,42 @@ export default function PollsListScreen() {
                                                             ) : (
                                                                 <View style={styles.tagStandard}>
                                                                     <Ionicons name="globe-outline" size={12} color="#4B5563" />
-                                                                    <Text style={styles.tagTextStandard}>Public</Text>
+                                                                    <Text style={styles.tagTextStandard}>Open to all</Text>
                                                                 </View>
                                                             )}
 
                                                             {verified ? (
                                                                 <View style={styles.tagVerified}>
                                                                     <Ionicons name="checkmark-circle" size={12} color="#1F9F4E" />
-                                                                    <Text style={styles.tagTextVerified}>Verified</Text>
+                                                                    <Text style={styles.tagTextVerified}>Verified Poll</Text>
                                                                 </View>
                                                             ) : (
                                                                 <View style={styles.tagUnverified}>
                                                                     <Ionicons name="alert-circle" size={12} color="#EF4444" />
-                                                                    <Text style={styles.tagTextUnverified}>Unverified</Text>
+                                                                    <Text style={styles.tagTextUnverified}>Unverified Poll</Text>
                                                                 </View>
                                                             )}
                                                         </View>
 
-                                                        <Ionicons name="arrow-forward" size={16} color="#9CA3AF" />
+                                                        <View style={{ zIndex: 1, flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                                            {voterEmail === poll.creatorEmail && <TouchableOpacity
+                                                                onPress={() => deletePoll(poll.docPath, poll.title)}
+                                                                disabled={deletingIds.has(poll.docPath)}
+                                                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                            >
+                                                                {deletingIds.has(poll.docPath) ? (
+                                                                    <ActivityIndicator size="small" color="#9a9898ff" />
+                                                                ) : (
+                                                                    <Ionicons
+                                                                        style={{ position: "relative", left: 3 }}
+                                                                        name="trash"
+                                                                        size={16}
+                                                                        color="#9a9898ff"
+                                                                    />
+                                                                )}
+                                                            </TouchableOpacity>}
+                                                            <Ionicons name="arrow-forward" size={16} color="#9CA3AF" />
+                                                        </View>
                                                     </View>
                                                 </TouchableOpacity>
                                             );
@@ -484,6 +616,37 @@ export default function PollsListScreen() {
                     })
                 )}
             </ScrollView>
+            <View style={styles.bottomNav}>
+
+                {["all", "active", "closed"].map((f: any, index) => {
+
+                    return (<TouchableOpacity
+                        key={f}
+                        style={[styles.navItem, { backgroundColor: filter === f ? "#f0f0f0ff" : "#f9fafbff" }]}
+                        onPress={() => setFilter(f)}
+                    >
+                        <Ionicons name={icons[index]} size={20} color={"#555"} />
+                        <Text style={[styles.navText, { color: "#555" }]}>
+                            {f.charAt(0).toUpperCase() + f.slice(1)}
+                        </Text>
+                    </TouchableOpacity>)
+
+                })}
+
+                {/* Activity */}
+                <TouchableOpacity
+                    style={styles.navItem}
+                    onPress={() => router.replace("./create_poll_screen")}
+                >
+                    <Ionicons
+                        name="create-outline"
+                        size={20}
+                    />
+                    <Text style={[styles.navText]}>
+                        Create Poll
+                    </Text>
+                </TouchableOpacity>
+            </View>
         </ReusableScreen>
     );
 }
@@ -497,37 +660,50 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: "row", alignItems: "center", justifyContent: "space-between",
         backgroundColor: "#FFFFFF", paddingHorizontal: 16, paddingTop: Platform.OS === "ios" ? 16 : 12,
-
+        paddingBottom: 12,
+    },
+    headerLeftGroup: {
+        flexDirection: "row", alignItems: "center", gap: 8,
+    },
+    searchIconBtn: {
+        width: 36, height: 36, borderRadius: 18,
+        backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center",
     },
     backBtn: {
         width: 36, height: 36, borderRadius: 18,
         backgroundColor: "#e4e4e7ff", alignItems: "center", justifyContent: "center",
     },
     headerTitle: { fontSize: 18, fontWeight: "700", color: "#111827", letterSpacing: -0.3 },
+    headerTitleCentered: { flex: 1, textAlign: "center", marginHorizontal: 8 },
     headerCountPill: {
         minWidth: 32, height: 28, paddingHorizontal: 10, borderRadius: 14,
         backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center",
     },
     headerCountText: { fontSize: 13, fontWeight: "700", color: "#4B5563" },
 
-    searchSection: {
-        backgroundColor: "#FFFFFF",
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: "#F3F4F6",
-    },
-    searchWrap: {
+    // Expanded search bar (replaces backBtn/title/count inside the header row)
+    headerSearchExpanded: {
+        flex: 1,
         flexDirection: "row", alignItems: "center", gap: 8,
         backgroundColor: "#eaeaf6ff", borderRadius: 20,
-        marginHorizontal: 16, marginTop: 12,
-        paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 12 : 10,
-        marginBottom: 8,
+        paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 10 : 8,
     },
+    cancelBtn: { paddingLeft: 4 },
+    cancelText: { fontSize: 14, fontWeight: "600", color: "#d91f1fff" },
+
     searchInput: {
         flex: 1, fontSize: 15, color: "#111827",
         ...(Platform.OS === "web" && { outlineStyle: "none" } as any),
     },
 
+    filterSection: {
+        backgroundColor: "#FFFFFF",
+        paddingBottom: 12,
+        borderBottomWidth: 2,
+        borderBottomColor: "#d2ddd0ff",
+        borderTopWidth: 2,
+        borderTopColor: "#ecf5eaff",
+    },
     filterRow: {
         flexDirection: "row", alignItems: "center", justifyContent: "space-between",
         paddingHorizontal: 16, paddingTop: 8,
@@ -550,8 +726,8 @@ const styles = StyleSheet.create({
     liveBadgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#046C4E" },
     liveBadgeText: { fontSize: 12, fontWeight: "700", color: "#046C4E" },
 
-    scroll: { flex: 1, backgroundColor: "#dde4d8ff" },
-    scrollContent: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 20, gap: 6 },
+    scroll: { flex: 1, backgroundColor: "#e5ece3ff" },
+    scrollContent: { paddingHorizontal: 10, paddingTop: 5, paddingBottom: 10, gap: 6 },
     scrollEmpty: { flex: 1 },
 
     emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 16 },
@@ -564,23 +740,24 @@ const styles = StyleSheet.create({
 
     // Creator Group Card
     groupCard: {
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "#ffffff",
         borderRadius: 16,
         borderWidth: 2,
-        borderColor: "#ccd3cbff",
+        borderColor: "#ccdcc8ff",
         overflow: "hidden",
+        paddingBottom: 8,
     },
     creatorHeader: {
         flexDirection: "row", alignItems: "center", gap: 12,
-        paddingHorizontal: 16, paddingVertical: 14,
-        backgroundColor: "#FFFFFF",
+        paddingHorizontal: 16, paddingTop: 8,
+        backgroundColor: "#ffffff",
     },
     creatorAvatar: {
         width: 40, height: 40, borderRadius: 20,
         alignItems: "center", justifyContent: "center"
     },
     creatorAvatarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
-    creatorInfo: { flex: 1, justifyContent: "center" },
+    creatorInfo: { flex: 1, justifyContent: "center", },
     creatorName: { fontSize: 15, fontWeight: "700", color: "#111827", marginBottom: 2 },
     creatorEmail: { fontSize: 13, color: "#6B7280" },
 
@@ -593,7 +770,7 @@ const styles = StyleSheet.create({
 
     pollsWrap: {
         paddingHorizontal: 12, paddingBottom: 12, gap: 8, backgroundColor: "#FFFFFF",
-        borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 12
+        paddingTop: 8
     },
 
     // Poll Card Layout
@@ -620,7 +797,7 @@ const styles = StyleSheet.create({
     pollLogo: {
         width: 52,
         height: 52,
-        borderRadius: 8,
+        borderRadius: 48,
         backgroundColor: "#F3F4F6",
         borderWidth: 1,
         borderColor: "#E5E7EB",
@@ -647,7 +824,7 @@ const styles = StyleSheet.create({
         justifyContent: "space-between",
         gap: 12,
     },
-    pollTitle: { flex: 1, fontSize: 15, fontWeight: "600", color: "#111827", lineHeight: 20 },
+    pollTitle: { flex: 1, fontSize: 14, fontWeight: "500", color: "#415174ff", lineHeight: 20 },
 
     statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, flexShrink: 0 },
     badgeActive: { backgroundColor: "#DEF7EC" },
@@ -681,4 +858,98 @@ const styles = StyleSheet.create({
 
     tagUnverified: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: "#FEF2F2" },
     tagTextUnverified: { fontSize: 12, color: "#B91C1C", fontWeight: "600" },
+    bottomNav: {
+        flexDirection: "row",
+        justifyContent: "space-around",
+        paddingVertical: 10,
+        borderTopWidth: 0.5,
+        borderTopColor: "#ccc",
+        backgroundColor: "#fff",
+    },
+    navItem: { alignItems: "center", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+    navText: { fontSize: 13, marginTop: 2, fontWeight: "600" },
+
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(0,0,0,0.45)",
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 24,
+    },
+    modalCard: {
+        width: "100%",
+        maxWidth: 340,
+        backgroundColor: "#FFFFFF",
+        borderRadius: 16,
+        padding: 10,
+        alignItems: "center",
+    },
+    modalIconWrap: {
+        height: 39,
+        borderRadius: 24,
+        backgroundColor: "#FEF2F2",
+        marginBottom: 8,
+        paddingHorizontal: 12,
+        flexDirection: "row", justifyContent: "center", alignItems: "center",
+        gap: 8,
+    },
+    modalTitle: {
+        fontSize: 16,
+        fontWeight: "700",
+        color: "#111827",
+    },
+    modalDesc: {
+        fontSize: 14,
+        color: "#6B7280",
+        textAlign: "center",
+        lineHeight: 20,
+        marginBottom: 20,
+    },
+    modalActions: {
+        flexDirection: "row",
+        gap: 10,
+        width: "100%",
+    },
+    modalCancelBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: "#F3F4F6",
+        alignItems: "center",
+    },
+    modalCancelText: {
+        fontSize: 14,
+        fontWeight: "600",
+        color: "#374151",
+    },
+    modalDeleteBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: "#EF4444",
+        alignItems: "center",
+    },
+    modalDeleteText: {
+        fontSize: 14,
+        fontWeight: "600",
+        color: "#FFFFFF",
+    },
+
+    pollLogoWrapper: {
+        width: 62,
+        height: 62,
+        borderRadius: 48,
+        backgroundColor: "#F3F4F6",
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+        padding: 3,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+    },
+    pollLogoInner: {
+        width: "120%",
+        height: "120%",
+        borderRadius: 50,
+    },
 });

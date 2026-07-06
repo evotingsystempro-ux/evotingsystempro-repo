@@ -20,12 +20,11 @@ import * as FileSystem from "expo-file-system";
 import * as DocumentPicker from "expo-document-picker";
 import * as XLSX from "xlsx";
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import ReusableScreen from "@/components/ReusableScreen";
 import { GlobalContext } from "@/context";
 import { db, storage } from "@/firebase";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-import { ref, uploadBytes, uploadString, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +38,7 @@ interface Aspirant {
   photoUri: string | null; // local preview uri, once picked
   photoUrl: string | null; // uploaded download url, once uploaded
   uploadingPhoto: boolean;
+  photoError: string | null;
 }
 
 interface ManualVoterEntry {
@@ -63,11 +63,7 @@ const generatePollId = () =>
 const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
-const pad2 = (n: number) => n.toString().padStart(2, "0");
-const toDateInputValue = (d: Date) =>
-  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const toTimeInputValue = (d: Date) =>
-  `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+
 
 const AVATAR_PALETTE = ["#1F9F4E", "#2563EB", "#D97706", "#7C3AED", "#DB2777", "#0D9488", "#DC2626", "#0891B2"];
 
@@ -81,8 +77,14 @@ const resolveImageMeta = (uri: string, mimeTypeFromPicker?: string) => {
   return { ext, contentType };
 };
 
-const MAX_IMAGE_KB = 100; // any uploaded image (logo, aspirant photo, ...) targets this file-size cap
+const MAX_IMAGE_KB = 200; // any uploaded image (logo, aspirant photo, ...) is auto-compressed down to this size if it exceeds it
 const MAX_IMAGE_BYTES = MAX_IMAGE_KB * 1024;
+
+const MAX_UPLOAD_KB = 2048; // 2MB hard cap — images larger than this are rejected outright, not compressed
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_KB * 1024;
+
+const MIN_UPLOAD_KB = 3; // images smaller than this are rejected outright (too low quality)
+const MIN_UPLOAD_BYTES = MIN_UPLOAD_KB * 1024;
 
 // Reads a picked image's file size in bytes, cross-platform:
 // - Uses the picker's own reported size first when available (fast path,
@@ -244,8 +246,8 @@ export default function CreatePollScreen() {
   const [title, setTitle] = useState("");
   const [pollType, setPollType] = useState<PollType>("single");
   const [aspirants, setAspirants] = useState<Aspirant[]>([
-    { id: "1", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false },
-    { id: "2", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false },
+    { id: "1", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false, photoError: null },
+    { id: "2", name: "", email: "", photoUri: null, photoUrl: null, uploadingPhoto: false, photoError: null },
   ]);
   const [deadline, setDeadline] = useState<Date | null>(null);
   const [isAnonymous, setIsAnonymous] = useState(false);
@@ -275,10 +277,17 @@ export default function CreatePollScreen() {
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
 
-  // Inline deadline picker
-  const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
-  const [pendingDate, setPendingDate] = useState<Date>(new Date());
+  // Deadline — entered as plain text fields instead of a date/time picker.
+  // The native picker component behaves inconsistently across Android
+  // OEMs, so plain numeric inputs are used instead for reliability.
+  const [deadlineDay, setDeadlineDay] = useState("");
+  const [deadlineMonth, setDeadlineMonth] = useState("");
+  const [deadlineYear, setDeadlineYear] = useState("");
+  const [deadlineHour, setDeadlineHour] = useState("");
+  const [deadlineMinute, setDeadlineMinute] = useState("");
+  const [deadlineError, setDeadlineError] = useState<string | null>(null);
 
   // Post-publish success state
   const [publishedTitle, setPublishedTitle] = useState<string | null>(null);
@@ -296,6 +305,7 @@ export default function CreatePollScreen() {
         photoUri: null,
         photoUrl: null,
         uploadingPhoto: false,
+        photoError: null,
       },
     ]);
   };
@@ -328,7 +338,7 @@ export default function CreatePollScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
@@ -337,10 +347,29 @@ export default function CreatePollScreen() {
     if (result.canceled || !result.assets?.length) return;
 
     const asset = result.assets[0];
+
+    const assetBytes = await getImageByteSize(asset.uri, asset.fileSize);
+    if (assetBytes > MAX_UPLOAD_BYTES) {
+      setAspirants((prev) =>
+        prev.map((a) =>
+          a.id === aspirantId ? { ...a, photoError: "Image size must not exceed 2MB." } : a
+        )
+      );
+      return;
+    }
+    if (assetBytes < MIN_UPLOAD_BYTES) {
+      setAspirants((prev) =>
+        prev.map((a) =>
+          a.id === aspirantId ? { ...a, photoError: "Image size is too small." } : a
+        )
+      );
+      return;
+    }
+
     setAspirants((prev) =>
       prev.map((a) =>
         a.id === aspirantId
-          ? { ...a, photoUri: asset.uri, photoUrl: null, uploadingPhoto: true }
+          ? { ...a, photoUri: asset.uri, photoUrl: null, uploadingPhoto: true, photoError: null }
           : a
       )
     );
@@ -373,18 +402,9 @@ export default function CreatePollScreen() {
       const storagePath = `aspirant_photos/${rawUserEmail}/${generatePollId()}_${aspirantId}.${ext}`;
       const storageRef = ref(storage, storagePath);
 
-      if (Platform.OS === "web") {
-        const response = await fetch(uploadUri);
-        const blob = await response.blob();
-        await withTimeout(uploadBytes(storageRef, blob, { contentType }));
-      } else {
-        const base64 = await FileSystem.readAsStringAsync(uploadUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await withTimeout(
-          uploadString(storageRef, base64, "base64", { contentType })
-        );
-      }
+      const response = await fetch(uploadUri);
+      const blob = await response.blob();
+      await withTimeout(uploadBytes(storageRef, blob, { contentType }));
 
       const downloadUrl = await getDownloadURL(storageRef);
       setAspirants((prev) =>
@@ -416,7 +436,7 @@ export default function CreatePollScreen() {
   const removeAspirantPhoto = (aspirantId: string) => {
     setAspirants((prev) =>
       prev.map((a) =>
-        a.id === aspirantId ? { ...a, photoUri: null, photoUrl: null } : a
+        a.id === aspirantId ? { ...a, photoUri: null, photoUrl: null, photoError: null } : a
       )
     );
   };
@@ -556,7 +576,7 @@ export default function CreatePollScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
       quality: 0.8,
@@ -565,6 +585,18 @@ export default function CreatePollScreen() {
     if (result.canceled || !result.assets?.length) return;
 
     const asset = result.assets[0];
+
+    const assetBytes = await getImageByteSize(asset.uri, asset.fileSize);
+    if (assetBytes > MAX_UPLOAD_BYTES) {
+      setLogoError("Image size must not exceed 2MB.");
+      return;
+    }
+    if (assetBytes < MIN_UPLOAD_BYTES) {
+      setLogoError("Image size is too small.");
+      return;
+    }
+
+    setLogoError(null);
     setLogoUri(asset.uri);
     setUploadingLogo(true);
 
@@ -594,18 +626,9 @@ export default function CreatePollScreen() {
       const storagePath = `poll_logos/${rawUserEmail}/${generatePollId()}.${ext}`;
       const storageRef = ref(storage, storagePath);
 
-      if (Platform.OS === "web") {
-        const response = await fetch(uploadUri);
-        const blob = await response.blob();
-        await withTimeout(uploadBytes(storageRef, blob, { contentType }));
-      } else {
-        const base64 = await FileSystem.readAsStringAsync(uploadUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await withTimeout(
-          uploadString(storageRef, base64, "base64", { contentType })
-        );
-      }
+      const response = await fetch(uploadUri);
+      const blob = await response.blob();
+      await withTimeout(uploadBytes(storageRef, blob, { contentType }));
 
       const downloadUrl = await getDownloadURL(storageRef);
       setLogoUrl(downloadUrl);
@@ -628,65 +651,69 @@ export default function CreatePollScreen() {
   const removeLogo = () => {
     setLogoUri(null);
     setLogoUrl("");
+    setLogoError(null);
   };
 
   // ── Deadline picker ─────────────────────────────────────────────────────────
 
-  const openDeadlinePicker = () => {
-    setPendingDate(deadline ?? new Date());
-    setShowDeadlinePicker(true);
-  };
+  // Parses the day/month/year/hour/minute fields into `deadline` whenever
+  // any of them change. Pure JS validation — no native component involved —
+  // so it behaves identically on iOS, Android, and web.
+  React.useEffect(() => {
+    if (!deadlineDay && !deadlineMonth && !deadlineYear && !deadlineHour && !deadlineMinute) {
+      setDeadline(null);
+      setDeadlineError(null);
+      return;
+    }
 
-  const confirmDeadline = () => {
-    setDeadline(pendingDate);
-    setShowDeadlinePicker(false);
-  };
+    if (!deadlineDay || !deadlineMonth || !deadlineYear || !deadlineHour || !deadlineMinute) {
+      setDeadline(null);
+      setDeadlineError("Enter the full day, month, year, hour, and minute.");
+      return;
+    }
 
-  const cancelDeadline = () => setShowDeadlinePicker(false);
+    const day = parseInt(deadlineDay, 10);
+    const month = parseInt(deadlineMonth, 10);
+    const year = parseInt(deadlineYear, 10);
+    const hour = parseInt(deadlineHour, 10);
+    const minute = parseInt(deadlineMinute, 10);
 
-  const handleNativeDateTimeChange = (_e: any, date?: Date) => {
-    if (date) setPendingDate(date);
-  };
+    if (
+      isNaN(day) || isNaN(month) || isNaN(year) || isNaN(hour) || isNaN(minute) ||
+      day < 1 || day > 31 ||
+      month < 1 || month > 12 ||
+      year < 2000 || year > 2100 ||
+      hour < 0 || hour > 23 ||
+      minute < 0 || minute > 59
+    ) {
+      setDeadline(null);
+      setDeadlineError("That date or time isn't valid.");
+      return;
+    }
 
-  const handleAndroidDateChange = (_e: any, date?: Date) => {
-    if (!date) return;
-    setPendingDate((prev) => {
-      const m = new Date(prev);
-      m.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
-      return m;
-    });
-  };
+    const candidate = new Date(year, month - 1, day, hour, minute, 0, 0);
 
-  const handleAndroidTimeChange = (_e: any, time?: Date) => {
-    if (!time) return;
-    setPendingDate((prev) => {
-      const m = new Date(prev);
-      m.setHours(time.getHours(), time.getMinutes(), 0);
-      return m;
-    });
-  };
+    // JS Date silently rolls over impossible dates (e.g. 31/02/2026 becomes
+    // 3 March), so re-check the parts match what was actually typed.
+    if (
+      candidate.getFullYear() !== year ||
+      candidate.getMonth() !== month - 1 ||
+      candidate.getDate() !== day
+    ) {
+      setDeadline(null);
+      setDeadlineError("That date doesn't exist — check the day and month.");
+      return;
+    }
 
-  const handleWebDateChange = (e: any) => {
-    const val = e.target.value;
-    if (!val) return;
-    const [y, mo, d] = val.split("-").map(Number);
-    setPendingDate((prev) => {
-      const m = new Date(prev);
-      m.setFullYear(y, mo - 1, d);
-      return m;
-    });
-  };
+    if (candidate.getTime() <= Date.now()) {
+      setDeadline(null);
+      setDeadlineError("Deadline must be in the future.");
+      return;
+    }
 
-  const handleWebTimeChange = (e: any) => {
-    const val = e.target.value;
-    if (!val) return;
-    const [h, min] = val.split(":").map(Number);
-    setPendingDate((prev) => {
-      const m = new Date(prev);
-      m.setHours(h, min, 0);
-      return m;
-    });
-  };
+    setDeadline(candidate);
+    setDeadlineError(null);
+  }, [deadlineDay, deadlineMonth, deadlineYear, deadlineHour, deadlineMinute]);
 
   // ── Validation ──────────────────────────────────────────────────────────────
 
@@ -980,10 +1007,13 @@ export default function CreatePollScreen() {
                 )}
               </View>
             ) : (
-              <TouchableOpacity style={styles.logoRow} onPress={pickLogo} activeOpacity={0.7}>
-                <Ionicons name="image-outline" size={18} color="#1F9F4E" />
-                <Text style={styles.logoText}>Tap to add logo or banner image</Text>
-              </TouchableOpacity>
+              <View>
+                <TouchableOpacity style={styles.logoRow} onPress={pickLogo} activeOpacity={0.7}>
+                  <Ionicons name="image-outline" size={18} color="#1F9F4E" />
+                  <Text style={styles.logoText}>Tap to add logo or banner image</Text>
+                </TouchableOpacity>
+                {logoError && <Text style={styles.errorText}>{logoError}</Text>}
+              </View>
             )}
           </View>
 
@@ -1142,16 +1172,19 @@ export default function CreatePollScreen() {
                       )}
                     </View>
                   ) : (
-                    <TouchableOpacity
-                      style={styles.aspirantPhotoRow}
-                      onPress={() => pickAspirantPhoto(asp.id)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="camera-outline" size={16} color="#1F9F4E" />
-                      <Text style={styles.aspirantPhotoText}>
-                        Tap to add a photo — a color avatar is used if skipped
-                      </Text>
-                    </TouchableOpacity>
+                    <View>
+                      <TouchableOpacity
+                        style={styles.aspirantPhotoRow}
+                        onPress={() => pickAspirantPhoto(asp.id)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="camera-outline" size={16} color="#1F9F4E" />
+                        <Text style={styles.aspirantPhotoText}>
+                          Tap to add a photo - a color avatar is used if skipped
+                        </Text>
+                      </TouchableOpacity>
+                      {asp.photoError && <Text style={styles.errorText}>{asp.photoError}</Text>}
+                    </View>
                   )}
                 </View>
               );
@@ -1195,90 +1228,72 @@ export default function CreatePollScreen() {
 
             <View style={styles.dividerThin} />
 
-            <Text style={[styles.fieldHint, { color: "#3e3f3fff", fontSize: 14, fontWeight: "600" }]}>Voting deadline *</Text>
             <Text style={styles.fieldHint}>
-              Required - voters can only vote until this date & time.
+              Required voters can only vote until this date & time (24-hour format).
             </Text>
 
-            <TouchableOpacity
-              style={[styles.deadlineRow, deadline ? styles.deadlineRowActive : null]}
-              onPress={openDeadlinePicker}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="calendar-outline" size={16} color="#1F9F4E" />
-              <Text style={[styles.deadlineText, deadline ? styles.deadlineTextActive : null]}>
-                {deadline ? deadline.toLocaleString() : "Set end date & time"}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.dateTimeInputRow}>
+              <TextInput
+                style={[styles.input, styles.dateInputSmall]}
+                placeholder="DD"
+                placeholderTextColor="#b0b0b0"
+                value={deadlineDay}
+                onChangeText={(t) => setDeadlineDay(t.replace(/[^0-9]/g, "").slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <Text style={styles.dateTimeSeparator}>/</Text>
+              <TextInput
+                style={[styles.input, styles.dateInputSmall]}
+                placeholder="MM"
+                placeholderTextColor="#b0b0b0"
+                value={deadlineMonth}
+                onChangeText={(t) => setDeadlineMonth(t.replace(/[^0-9]/g, "").slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <Text style={styles.dateTimeSeparator}>/</Text>
+              <TextInput
+                style={[styles.input, styles.dateInputYear]}
+                placeholder="YYYY"
+                placeholderTextColor="#b0b0b0"
+                value={deadlineYear}
+                onChangeText={(t) => setDeadlineYear(t.replace(/[^0-9]/g, "").slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
+            </View>
 
-            {!deadline && (
-              <Text style={[styles.errorText, { marginLeft: 35 }]}>Voting deadline is required</Text>
+            <View style={[styles.dateTimeInputRow, { marginTop: 10 }]}>
+              <TextInput
+                style={[styles.input, styles.dateInputSmall]}
+                placeholder="HH"
+                placeholderTextColor="#b0b0b0"
+                value={deadlineHour}
+                onChangeText={(t) => setDeadlineHour(t.replace(/[^0-9]/g, "").slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <Text style={styles.dateTimeSeparator}>:</Text>
+              <TextInput
+                style={[styles.input, styles.dateInputSmall]}
+                placeholder="MM"
+                placeholderTextColor="#b0b0b0"
+                value={deadlineMinute}
+                onChangeText={(t) => setDeadlineMinute(t.replace(/[^0-9]/g, "").slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+            </View>
+
+            {deadlineError && <Text style={styles.errorText}>{deadlineError}</Text>}
+            {!deadline && !deadlineError && (
+              null
             )}
-
-            {showDeadlinePicker && (
-              <View style={styles.inlinePickerBox}>
-                <Text style={styles.inlinePickerPreview}>
-                  {pendingDate.toLocaleString()}
-                </Text>
-
-                {Platform.OS === "ios" && (
-                  <DateTimePicker
-                    value={pendingDate}
-                    mode="datetime"
-                    display="spinner"
-                    onChange={handleNativeDateTimeChange}
-                    minimumDate={new Date()}
-                    style={{ width: "100%" }}
-                  />
-                )}
-
-                {Platform.OS === "android" && (
-                  <View style={styles.androidPickersRow}>
-                    <DateTimePicker
-                      value={pendingDate}
-                      mode="date"
-                      display="spinner"
-                      onChange={handleAndroidDateChange}
-                      minimumDate={new Date()}
-                      style={styles.androidSpinner}
-                    />
-                    <DateTimePicker
-                      value={pendingDate}
-                      mode="time"
-                      display="spinner"
-                      onChange={handleAndroidTimeChange}
-                      style={styles.androidSpinner}
-                    />
-                  </View>
-                )}
-
-                {Platform.OS === "web" && (
-                  <View style={styles.webPickersRow}>
-                    <input
-                      type="date"
-                      value={toDateInputValue(pendingDate)}
-                      min={toDateInputValue(new Date())}
-                      onChange={handleWebDateChange}
-                      style={webInputStyle}
-                    />
-                    <input
-                      type="time"
-                      value={toTimeInputValue(pendingDate)}
-                      onChange={handleWebTimeChange}
-                      style={webInputStyle}
-                    />
-                  </View>
-                )}
-
-                <View style={styles.inlinePickerActions}>
-                  <TouchableOpacity onPress={cancelDeadline} style={styles.inlineCancelBtn}>
-                    <Text style={styles.inlineCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={confirmDeadline} style={styles.inlineDoneBtn}>
-                    <Text style={styles.inlineDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+            {deadline && !deadlineError && (
+              <Text style={styles.deadlineConfirmedText}>
+                Ends: {deadline.toLocaleString()}
+              </Text>
             )}
 
             <View style={styles.dividerThin} />
@@ -1555,23 +1570,11 @@ export default function CreatePollScreen() {
   );
 }
 
-// ─── Web-only datetime input style ───────────────────────────────────────────
-
-const webInputStyle: any = {
-  flex: 1,
-  fontSize: 15,
-  padding: 12,
-  borderRadius: 10,
-  border: "1px solid #e5e7eb",
-  backgroundColor: "#fff",
-  color: "#1a1a1a",
-  outline: "none",
-};
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: "#f5f6f8" },
+  flex: { flex: 1, backgroundColor: "#f5f6f8", },
 
   header: {
     flexDirection: "row",
@@ -1593,8 +1596,8 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a", letterSpacing: -0.2 },
 
-  scroll: { flex: 1, backgroundColor: "#deead9ff", margin: 5, },
-  scrollContent: { paddingHorizontal: 4, paddingTop: 5, paddingBottom: 30 },
+  scroll: { flex: 1, backgroundColor: "#e5ece3ff", gap: 5, margin: 5, },
+  scrollContent: { paddingHorizontal: 7, paddingTop: 9, paddingBottom: 30 },
 
   card: {
     backgroundColor: "#fff",
@@ -1602,7 +1605,7 @@ const styles = StyleSheet.create({
     padding: 6,
     borderWidth: 1.4,
     borderColor: "#d9dad9ff",
-    marginBottom: 5,
+    marginBottom: 8,
   },
 
   sectionHeaderRow: {
@@ -1637,7 +1640,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 13, fontWeight: "600", color: "#374151", marginBottom: 6 },
   subFieldLabel: { fontSize: 12, fontWeight: "600", color: "#6b7280", marginBottom: 5 },
   optional: { fontWeight: "400", color: "#9ca3af" },
-  fieldHint: { marginLeft: 35, fontSize: 12, color: "#9ca3af", marginBottom: 12, marginTop: -8 },
+  fieldHint: { marginLeft: 35, fontSize: 14, fontWeight: "600", color: "#565758ff", marginBottom: 12, marginTop: -8 },
 
   input: {
     borderWidth: 1,
@@ -1718,10 +1721,10 @@ const styles = StyleSheet.create({
   },
   aspirantPhotoRemoveBtn: {
     position: "absolute",
-    top: -4,
-    right: -4,
+    top: 5,
+    right: 10,
     backgroundColor: "#fff",
-    borderRadius: 10,
+    borderRadius: 11,
   },
 
   radioRow: {
@@ -1775,55 +1778,31 @@ const styles = StyleSheet.create({
   addOptionBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 4, justifyContent: "center" },
   addOptionText: { fontSize: 13, color: "#1F9F4E", fontWeight: "600" },
 
-  deadlineRow: {
+  dateTimeInputRow: {
+    marginLeft: 35,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    backgroundColor: "#fafafa",
-    marginBottom: 8,
   },
-  deadlineRowActive: { borderColor: "#1F9F4E", backgroundColor: "#EAF6EE" },
-  deadlineText: { flex: 1, fontSize: 14, color: "#9ca3af" },
-  deadlineTextActive: { color: "#1F9F4E", fontWeight: "500" },
-
-  inlinePickerBox: {
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 8,
-    backgroundColor: "#fafafa",
+  dateInputSmall: {
+    width: 56,
+    textAlign: "center",
   },
-  inlinePickerPreview: {
-    fontSize: 14,
+  dateInputYear: {
+    width: 76,
+    textAlign: "center",
+  },
+  dateTimeSeparator: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#9ca3af",
+  },
+  deadlineConfirmedText: {
+    fontSize: 13,
     fontWeight: "600",
     color: "#1F9F4E",
-    textAlign: "center",
-    marginBottom: 8,
+    marginTop: 4,
   },
-  androidPickersRow: { flexDirection: "row", justifyContent: "center" },
-  androidSpinner: { flex: 1 },
-  webPickersRow: { flexDirection: "row", gap: 10 },
-  inlinePickerActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 16,
-    marginTop: 10,
-  },
-  inlineCancelBtn: { paddingVertical: 6, paddingHorizontal: 4 },
-  inlineCancelText: { fontSize: 14, fontWeight: "500", color: "#9ca3af" },
-  inlineDoneBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    backgroundColor: "#1F9F4E",
-  },
-  inlineDoneText: { fontSize: 14, fontWeight: "700", color: "#fff" },
 
   toggleRow: {
     flexDirection: "row",
@@ -1971,7 +1950,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
-  publishBtnDisabled: { backgroundColor: "#d1d5db", shadowOpacity: 0, elevation: 0 },
+  publishBtnDisabled: { marginHorizontal: 5, backgroundColor: "#b5b6b7ff", shadowOpacity: 0, elevation: 0 },
   publishText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   validationHint: {
     fontSize: 12,
