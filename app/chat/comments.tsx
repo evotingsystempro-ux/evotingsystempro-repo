@@ -625,6 +625,7 @@ export default function comments_flashList() {
         setMessages((prev) =>
           prev.map((m) => (m.id === id ? { ...m, status: "sent" } : m))
         );
+
         saveLocal(messages);
         await fetch(
           "https://email-service-570014654568.us-central1.run.app/push_notification",
