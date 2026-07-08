@@ -23,7 +23,7 @@ import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import ReusableScreen from "@/components/ReusableScreen";
 import { GlobalContext } from "@/context";
 import { db, storage } from "@/firebase";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,22 +35,20 @@ interface Aspirant {
   id: string;
   name: string;
   email: string;
-  photoUri: string | null; // local preview uri, once picked
-  photoUrl: string | null; // uploaded download url, once uploaded
+  photoUri: string | null;
+  photoUrl: string | null;
   uploadingPhoto: boolean;
   photoError: string | null;
 }
 
 interface ManualVoterEntry {
   id: string;
-  name: string;
-  email: string;
+  code: string;
 }
 
-interface ParsedVoter {
-  name: string;
-  email: string;
-}
+// A validated voter is now a single code/email string (matches
+// VALIDATED_VOTERS_DB's validCodes: string[] shape).
+type ParsedVoter = string;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,11 +61,8 @@ const generatePollId = () =>
 const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
-
-
 const AVATAR_PALETTE = ["#1F9F4E", "#2563EB", "#D97706", "#7C3AED", "#DB2777", "#0D9488", "#DC2626", "#0891B2"];
 
-// Resolves a file extension + content type for a picked image asset.
 const resolveImageMeta = (uri: string, mimeTypeFromPicker?: string) => {
   const rawExt = uri.split(".").pop()?.split("?")[0]?.toLowerCase();
   const knownExts = ["jpg", "jpeg", "png", "webp", "heic", "gif"];
@@ -77,22 +72,15 @@ const resolveImageMeta = (uri: string, mimeTypeFromPicker?: string) => {
   return { ext, contentType };
 };
 
-const MAX_IMAGE_KB = 200; // any uploaded image (logo, aspirant photo, ...) is auto-compressed down to this size if it exceeds it
+const MAX_IMAGE_KB = 200;
 const MAX_IMAGE_BYTES = MAX_IMAGE_KB * 1024;
 
-const MAX_UPLOAD_KB = 2048; // 2MB hard cap — images larger than this are rejected outright, not compressed
+const MAX_UPLOAD_KB = 2048;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_KB * 1024;
 
-const MIN_UPLOAD_KB = 3; // images smaller than this are rejected outright (too low quality)
+const MIN_UPLOAD_KB = 3;
 const MIN_UPLOAD_BYTES = MIN_UPLOAD_KB * 1024;
 
-// Reads a picked image's file size in bytes, cross-platform:
-// - Uses the picker's own reported size first when available (fast path,
-//   no extra I/O).
-// - Falls back to expo-file-system on iOS/Android.
-// - Falls back to fetch + blob.size on web, since expo-file-system can't
-//   read blob: URIs there and the picker doesn't reliably report fileSize
-//   on web either.
 const getImageByteSize = async (uri: string, knownBytes?: number): Promise<number> => {
   if (knownBytes) return knownBytes;
 
@@ -113,21 +101,6 @@ const getImageByteSize = async (uri: string, knownBytes?: number): Promise<numbe
   }
 };
 
-// Checks a picked image's FILE SIZE (KB) — not pixel dimensions — and, if
-// it's over maxBytes, proportionally shrinks the image toward that cap.
-//
-// File size roughly scales with pixel AREA (width × height) rather than a
-// single linear dimension, so the byte ratio we need to shave off is
-// applied to width/height as its SQUARE ROOT (area = scale² × area) — e.g.
-// a 400kb image capped at 100kb needs ~25% of its bytes, so each side is
-// scaled to sqrt(0.25) = 50%, roughly quartering the pixel area and, with
-// it, the file size.
-//
-// This is a single-pass estimate rather than a byte-exact guarantee — JPEG
-// output size also depends on image content/compression — but it reliably
-// lands oversized images in the right ballpark on every platform, since
-// expo-image-manipulator backs onto native resize APIs on iOS/Android and
-// an in-browser canvas on web (no platform branching needed here).
 const compressToTargetSize = async (
   uri: string,
   width: number,
@@ -141,8 +114,8 @@ const compressToTargetSize = async (
     return { uri, wasResized: false, scalePercent: 100 };
   }
 
-  const byteRatio = maxBytes / originalBytes; // e.g. 0.25 = need ~25% of the original bytes
-  const linearScale = Math.sqrt(byteRatio); // scale applied to width/height
+  const byteRatio = maxBytes / originalBytes;
+  const linearScale = Math.sqrt(byteRatio);
   const target = {
     width: Math.max(1, Math.round((width || 1) * linearScale)),
     height: Math.max(1, Math.round((height || 1) * linearScale)),
@@ -161,11 +134,6 @@ const compressToTargetSize = async (
   };
 };
 
-// Used as the aspirant's "photo" value when no photo is uploaded — picks a
-// random color from the same palette used for the numbered avatars, e.g. "#1F9F4E".
-const getRandomAspirantColor = () =>
-  AVATAR_PALETTE[Math.floor(Math.random() * AVATAR_PALETTE.length)];
-
 const withTimeout = <T,>(promise: Promise<T>, ms = 20000): Promise<T> =>
   Promise.race([
     promise,
@@ -174,31 +142,34 @@ const withTimeout = <T,>(promise: Promise<T>, ms = 20000): Promise<T> =>
     ),
   ]);
 
-// Turns a free-form voter code into a safe Firestore document ID.
-// Turns a voter's email into a safe Firestore document ID.
-const sanitizeDocId = (rawEmail: string) => {
-  const cleaned = rawEmail.trim().toLowerCase().replace(/\//g, "-").replace(/\s+/g, "");
-  return cleaned.length ? cleaned : `VOTER_${Date.now()}`;
-};
+// Normalizes a voter's email/code for storage in VALIDATED_VOTERS_DB's
+// validCodes array — lowercased & trimmed so lookups match consistently.
+const sanitizeVoterCode = (raw: string) => raw.trim().toLowerCase();
 
-// Parses comma/tab-delimited text (.csv / .txt) into {name, code, email} rows.
 const parseDelimitedVoters = (text: string): ParsedVoter[] => {
   const lines = text
     .split(/\r\n|\r|\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  const rows = lines.map((line) => line.split(/\t|,/).map((c) => c.trim()));
+  const rows = lines.map((line) =>
+    line.split(/\t|,/).map((c) => c.trim()).filter(Boolean)
+  );
 
+  // Skip a header row like "code" / "email" / "voter code".
   const dataRows =
-    rows.length && rows[0][0] && /name/i.test(rows[0][0]) ? rows.slice(1) : rows;
+    rows.length && rows[0][0] && /code|email/i.test(rows[0][0])
+      ? rows.slice(1)
+      : rows;
 
+  // Tolerate single-column files (just the code) as well as multi-column
+  // files (e.g. name, code) — pick whichever cell in the row is a valid
+  // email/code, falling back to the first cell.
   return dataRows
-    .map((r) => ({ name: r[0] || "", email: r[1] || "" }))
-    .filter((v) => v.name && v.email && isValidEmail(v.email));
+    .map((cells) => cells.find((c) => isValidEmail(c)) || cells[0] || "")
+    .filter((v) => v && isValidEmail(v));
 };
 
-// Parses an Excel workbook (base64-encoded .xlsx / .xls) into {name, code, email} rows.
 const parseExcelVoters = (base64: string): ParsedVoter[] => {
   const workbook = XLSX.read(base64, { type: "base64" });
   const sheetName = workbook.SheetNames[0];
@@ -209,20 +180,18 @@ const parseExcelVoters = (base64: string): ParsedVoter[] => {
   });
 
   const dataRows =
-    rows.length && rows[0][0] && /name/i.test(String(rows[0][0]))
+    rows.length && rows[0][0] && /code|email/i.test(String(rows[0][0]))
       ? rows.slice(1)
       : rows;
 
   return dataRows
-    .map((r) => ({
-      name: String(r[0] ?? "").trim(),
-      email: String(r[1] ?? "").trim(),
-    }))
-    .filter((v) => v.name && v.email && isValidEmail(v.email));
+    .map((r) => {
+      const cells = r.map((c) => String(c ?? "").trim()).filter(Boolean);
+      return cells.find((c) => isValidEmail(c)) || cells[0] || "";
+    })
+    .filter((v) => v && isValidEmail(v));
 };
 
-// Reads a web blob: URI as base64 (expo-file-system doesn't support
-// reading blob: URIs on web, so we go through FileReader instead).
 const fetchUriAsBase64 = async (uri: string): Promise<string> => {
   const response = await fetch(uri);
   const blob = await response.blob();
@@ -253,19 +222,13 @@ export default function CreatePollScreen() {
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [showResults, setShowResults] = useState(true);
 
-  // ── Voter validation ────────────────────────────────────────────────────────
-  // requiresVoterValidation === "requires_voters_validation" on the saved poll.
-  // When true, only voters whose code exists under
-  // VALIDATED_VOTERS_DB/{creatorEmail}/{pollId}/{code} may vote.
   const [requiresVoterValidation, setRequiresVoterValidation] = useState(false);
   const [voterValidationMode, setVoterValidationMode] = useState<VoterValidationMode>("manual");
 
-  // Option 2: manual entry — dynamic name+code+email rows with a "+" to add more.
   const [manualVoters, setManualVoters] = useState<ManualVoterEntry[]>([
-    { id: "1", name: "", email: "" },
+    { id: "1", code: "" },
   ]);
 
-  // Option 1: file upload — CSV / Excel / Text, parsed cross-platform.
   const [uploadedVoters, setUploadedVoters] = useState<ParsedVoter[]>([]);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [parsingFile, setParsingFile] = useState(false);
@@ -273,15 +236,11 @@ export default function CreatePollScreen() {
 
   const [publishing, setPublishing] = useState(false);
 
-  // Logo
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoError, setLogoError] = useState<string | null>(null);
 
-  // Deadline — entered as plain text fields instead of a date/time picker.
-  // The native picker component behaves inconsistently across Android
-  // OEMs, so plain numeric inputs are used instead for reliability.
   const [deadlineDay, setDeadlineDay] = useState("");
   const [deadlineMonth, setDeadlineMonth] = useState("");
   const [deadlineYear, setDeadlineYear] = useState("");
@@ -289,7 +248,6 @@ export default function CreatePollScreen() {
   const [deadlineMinute, setDeadlineMinute] = useState("");
   const [deadlineError, setDeadlineError] = useState<string | null>(null);
 
-  // Post-publish success state
   const [publishedTitle, setPublishedTitle] = useState<string | null>(null);
 
   // ── Aspirant helpers ────────────────────────────────────────────────────────
@@ -320,10 +278,6 @@ export default function CreatePollScreen() {
       prev.map((a) => (a.id === id ? { ...a, [field]: value } : a))
     );
   };
-
-  // ── Aspirant photo (optional) ───────────────────────────────────────────────
-  // If a creator skips this, handlePublish assigns a random color (e.g.
-  // "#1F9F4E") as the aspirant's "photo" value instead of a URL.
 
   const pickAspirantPhoto = async (aspirantId: string) => {
     if (Platform.OS !== "web") {
@@ -447,7 +401,7 @@ export default function CreatePollScreen() {
     if (manualVoters.length >= 500) return;
     setManualVoters((prev) => [
       ...prev,
-      { id: Date.now().toString(), name: "", email: "" },
+      { id: Date.now().toString(), code: "" },
     ]);
   };
 
@@ -456,13 +410,9 @@ export default function CreatePollScreen() {
     setManualVoters((prev) => prev.filter((v) => v.id !== id));
   };
 
-  const updateManualVoter = (
-    id: string,
-    field: "name" | "email",
-    value: string
-  ) => {
+  const updateManualVoter = (id: string, value: string) => {
     setManualVoters((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, [field]: value } : v))
+      prev.map((v) => (v.id === id ? { ...v, code: value } : v))
     );
   };
 
@@ -472,21 +422,6 @@ export default function CreatePollScreen() {
     setFileParseError(null);
   };
 
-  // Cross-platform picker: works the same way on iOS, Android, and web.
-  //
-  // NOTE: strict MIME-type arrays (e.g. "text/csv") are unreliable across
-  // Android OEMs — many file providers tag .csv/.xlsx files as
-  // "application/octet-stream" or leave the type blank, which makes the
-  // native picker silently show zero matching files (looks like "nothing
-  // happens" when tapped). We ask for "*/*" instead and validate by file
-  // extension after the fact, which works consistently on iOS, Android,
-  // and web.
-  //
-  // The whole function is wrapped in try/catch: previously only the
-  // parsing step was guarded, so if getDocumentAsync itself threw (e.g.
-  // permission denial, or the native module not being linked yet after
-  // installing expo-document-picker), the promise rejected with no visible
-  // feedback at all — exactly the silent-failure symptom.
   const ALLOWED_VOTER_FILE_EXTS = ["csv", "txt", "xlsx", "xls"];
 
   const pickVoterFile = async () => {
@@ -536,7 +471,6 @@ export default function CreatePollScreen() {
             });
         parsed = parseExcelVoters(base64);
       } else {
-        // CSV or plain text
         const text =
           Platform.OS === "web"
             ? await (await fetch(asset.uri)).text()
@@ -548,7 +482,7 @@ export default function CreatePollScreen() {
 
       if (parsed.length === 0) {
         setFileParseError(
-          "Each row needs a name, valid email or code separated by commas. e.g. `John Doe,johndoe@example.com`"
+          "Each row needs one valid email or code. e.g. `johndoe@example.com`"
         );
       } else {
         setUploadedVoters(parsed);
@@ -656,9 +590,6 @@ export default function CreatePollScreen() {
 
   // ── Deadline picker ─────────────────────────────────────────────────────────
 
-  // Parses the day/month/year/hour/minute fields into `deadline` whenever
-  // any of them change. Pure JS validation — no native component involved —
-  // so it behaves identically on iOS, Android, and web.
   React.useEffect(() => {
     if (!deadlineDay && !deadlineMonth && !deadlineYear && !deadlineHour && !deadlineMinute) {
       setDeadline(null);
@@ -693,8 +624,6 @@ export default function CreatePollScreen() {
 
     const candidate = new Date(year, month - 1, day, hour, minute, 0, 0);
 
-    // JS Date silently rolls over impossible dates (e.g. 31/02/2026 becomes
-    // 3 March), so re-check the parts match what was actually typed.
     if (
       candidate.getFullYear() !== year ||
       candidate.getMonth() !== month - 1 ||
@@ -726,18 +655,15 @@ export default function CreatePollScreen() {
     : voterValidationMode === "file"
       ? uploadedVoters
       : manualVoters
-        .map((v) => ({
-          name: v.name.trim(),
-          email: v.email.trim(),
-        }))
-        .filter((v) => v.name && v.email);
+        .map((v) => v.code.trim())
+        .filter((code) => code.length > 0);
 
   const voterEmailDuplicates = validatedVotersList
-    .map((v) => v.email.trim().toLowerCase())
+    .map((code) => code.trim().toLowerCase())
     .filter((e, i, arr) => e && arr.indexOf(e) !== i);
 
   const voterEmailsInvalid = validatedVotersList.some(
-    (v) => v.email && !isValidEmail(v.email)
+    (code) => code && !isValidEmail(code)
   );
 
   const voterValidationValid =
@@ -756,19 +682,18 @@ export default function CreatePollScreen() {
     deadline !== null &&
     voterValidationValid;
 
-  // ── Derived progress (UI only) ──────────────────────────────────────────────
-
   const aspirantsValidCount = aspirants.filter(
     (a) => a.name.trim().length > 0 && isValidEmail(a.email)
   ).length;
 
   // ── Publish ─────────────────────────────────────────────────────────────────
   //
-  // Writes to:
+  // Writes to (flat structure):
   //   CREATOR_DB/{creatorEmail}
-  //   POLL_TITLE_DB/{creatorEmail}/polls/{pollId}
-  //   ASPIRANTS_DETAILS_DB/{creatorEmail}/{pollId}/{aspirantEmail}
-  //   VALIDATED_VOTERS_DB/{creatorEmail}/{pollId}/{code}   (only if requires_voters_validation)
+  //   POLL_TITLE_DB/{pollId}
+  //   ASPIRANTS_DETAILS_DB/{pollId}_{aspirantEmail}
+  //   VALIDATED_VOTERS_DB/{pollId}   → single doc, { validCodes: string[] }
+  //     (only when requires_voters_validation is true)
 
   const handlePublish = async () => {
     if (!isFormValid || !rawUserEmail) return;
@@ -783,10 +708,9 @@ export default function CreatePollScreen() {
       const creatorSnap = await getDoc(creatorRef);
       if (!creatorSnap.exists()) {
         await setDoc(creatorRef, {
-          name: userName || "Unknown",
-          email: creatorEmail,
+          creatorName: userName || "Unknown",
+          creatorEmail,
           status: "active",
-          createdAt: serverTimestamp(),
           dateCreated: now.toLocaleDateString(),
           timeCreated: now.toLocaleTimeString(),
         });
@@ -802,12 +726,12 @@ export default function CreatePollScreen() {
       // 3. Generate poll ID
       const pollId = generatePollId();
 
-      // 4. Save poll → POLL_TITLE_DB/{creatorEmail}/polls/{pollId}
-      await setDoc(doc(db, "POLL_TITLE_DB", creatorEmail, "polls", pollId), {
+      // 4. Save poll → POLL_TITLE_DB/{pollId}  (flat — no creatorEmail nesting)
+      await setDoc(doc(db, "POLL_TITLE_DB", pollId), {
         pollId,
         title: title.trim(),
         pollType,
-        requires_voters_validation: requiresVoterValidation,
+        requires_voters_validation: requiresVoterValidation ? "true" : "false",
         isAnonymous,
         showResults,
         logoUrl,
@@ -822,21 +746,22 @@ export default function CreatePollScreen() {
         timeCreated: now.toLocaleTimeString(),
       });
 
-      // 5. Save aspirants → ASPIRANTS_DETAILS_DB/{creatorEmail}/{pollId}/{aspirantEmail}
+      // 5. Save aspirants → ASPIRANTS_DETAILS_DB/{pollId}_{aspirantEmail}
+      //    (flat, composite doc ID so the same email can be a distinct
+      //    aspirant across different polls without colliding)
       await Promise.all(
         aspirants.map((aspirant) => {
           const aspirantEmail = aspirant.email.trim().toLowerCase();
+          const docId = `${pollId}_${aspirantEmail}`;
           return setDoc(
-            doc(db, "ASPIRANTS_DETAILS_DB", creatorEmail, pollId, aspirantEmail),
+            doc(db, "ASPIRANTS_DETAILS_DB", docId),
             {
+              pollId,
+              aspirantEmail,
               name: aspirant.name.trim(),
-              email: aspirantEmail,
-              // Uploaded photo URL when provided; otherwise a random color
-              // (e.g. "#1F9F4E") acts as the aspirant's default avatar.
-              photo: aspirant.photoUrl || getRandomAspirantColor(),
+              photo: aspirant.photoUrl || "",
               votes: 0,
               lastVotedAt: null,
-              pollId,
               creatorEmail,
               addedAt: serverTimestamp(),
             }
@@ -844,24 +769,15 @@ export default function CreatePollScreen() {
         })
       );
 
-      // 6. Save validated voters → VALIDATED_VOTERS_DB/{creatorEmail}/{pollId}/{code}
-      //    Only when this poll restricts voting to a pre-approved list.
+      // 6. Save validated voters → VALIDATED_VOTERS_DB/{pollId}
+      //    Single doc per poll holding a validCodes array. arrayUnion keeps
+      //    this write additive/dedupe-safe even if called more than once.
       if (requiresVoterValidation && validatedVotersList.length > 0) {
-        await Promise.all(
-          validatedVotersList.map((voter) => {
-            const docId = sanitizeDocId(voter.email);
-            return setDoc(
-              doc(db, "VALIDATED_VOTERS_DB", creatorEmail, pollId, docId),
-              {
-                name: voter.name.trim(),
-                email: voter.email.trim().toLowerCase(),
-                hasVoted: false,
-                pollId,
-                creatorEmail,
-                addedAt: serverTimestamp(),
-              }
-            );
-          })
+        const codes = validatedVotersList.map(sanitizeVoterCode);
+        await setDoc(
+          doc(db, "VALIDATED_VOTERS_DB", pollId),
+          { validCodes: arrayUnion(...codes) },
+          { merge: true }
         );
       }
 
@@ -1207,7 +1123,6 @@ export default function CreatePollScreen() {
               <Text style={styles.sectionLabel}>Settings</Text>
             </View>
 
-            {/* requires_voters_validation toggle */}
             <View style={styles.toggleRow}>
               <View style={styles.toggleIconWrap}>
                 <Ionicons name="shield-checkmark-outline" size={15} color="#6b7280" />
@@ -1287,9 +1202,6 @@ export default function CreatePollScreen() {
             </View>
 
             {deadlineError && <Text style={styles.errorText}>{deadlineError}</Text>}
-            {!deadline && !deadlineError && (
-              null
-            )}
             {deadline && !deadlineError && (
               <Text style={styles.deadlineConfirmedText}>
                 Ends: {deadline.toLocaleString()}
@@ -1352,11 +1264,10 @@ export default function CreatePollScreen() {
                 </View>
               </View>
               <Text style={styles.fieldHint}>
-                Add every voter allowed to vote — name and email. They'll be saved to
-                VALIDATED_VOTERS_DB for this poll.
+                Add every voter allowed to vote — their codes will be saved as a
+                validated-codes list for this poll.
               </Text>
 
-              {/* Option 1 vs Option 2 switch */}
               <View style={styles.modeSwitchRow}>
                 <TouchableOpacity
                   style={[
@@ -1404,31 +1315,22 @@ export default function CreatePollScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Option 2: Manual entry — dynamic rows, "+" to add another */}
               {voterValidationMode === "manual" && (
                 <View>
                   {manualVoters.map((voter, index) => {
-                    const emailTrim = voter.email.trim();
-                    const email = emailTrim.toLowerCase();
-                    const isDupEmail = !!email && voterEmailDuplicates.includes(email);
-                    const isBadEmail = !!emailTrim && !isValidEmail(emailTrim);
+                    const codeTrim = voter.code.trim();
+                    const code = codeTrim.toLowerCase();
+                    const isDupEmail = !!code && voterEmailDuplicates.includes(code);
+                    const isBadEmail = !!codeTrim && !isValidEmail(codeTrim);
                     return (
                       <View key={voter.id} style={styles.voterRow}>
                         <View style={styles.voterRowEmailWrap}>
                           <TextInput
-                            style={[styles.input, styles.voterInputName]}
-                            placeholder="Voter name"
-                            placeholderTextColor="#b0b0b0"
-                            value={voter.name}
-                            onChangeText={(t) => updateManualVoter(voter.id, "name", t)}
-                            maxLength={80}
-                          />
-                          <TextInput
                             style={[styles.input, styles.voterInputEmail]}
-                            placeholder="Email address"
+                            placeholder="Voter code / email"
                             placeholderTextColor="#b0b0b0"
-                            value={voter.email}
-                            onChangeText={(t) => updateManualVoter(voter.id, "email", t)}
+                            value={voter.code}
+                            onChangeText={(t) => updateManualVoter(voter.id, t)}
                             keyboardType="email-address"
                             autoCapitalize="none"
                             maxLength={120}
@@ -1445,11 +1347,11 @@ export default function CreatePollScreen() {
                         </View>
                         {isDupEmail && (
                           <Text style={styles.errorText}>
-                            Duplicate email — each voter needs a unique email
+                            Duplicate code — each voter needs a unique code
                           </Text>
                         )}
                         {isBadEmail && !isDupEmail && (
-                          <Text style={styles.errorText}>Invalid email address</Text>
+                          <Text style={styles.errorText}>Invalid email/code</Text>
                         )}
                       </View>
                     );
@@ -1462,7 +1364,6 @@ export default function CreatePollScreen() {
                 </View>
               )}
 
-              {/* Option 1: File upload — CSV, Excel, or Text */}
               {voterValidationMode === "file" && (
                 <View>
                   {!uploadedFileName ? (
@@ -1476,7 +1377,7 @@ export default function CreatePollScreen() {
                         Tap to upload CSV, Excel, or Text file
                       </Text>
                       <Text style={styles.fileUploadHint}>
-                        One voter per row — Name, Email (e.g. John Mensah, john@example.com)
+                        One code or email per row (e.g. 0324080720@htu.edu.gh)
                       </Text>
                     </TouchableOpacity>
                   ) : (
@@ -1500,9 +1401,9 @@ export default function CreatePollScreen() {
 
                       {!parsingFile && uploadedVoters.length > 0 && (
                         <View style={styles.filePreviewList}>
-                          {uploadedVoters.slice(0, 5).map((v, i) => (
-                            <Text key={`${v.email}-${i}`} style={styles.filePreviewItem}>
-                              {v.name} · {v.email}
+                          {uploadedVoters.slice(0, 5).map((code, i) => (
+                            <Text key={`${code}-${i}`} style={styles.filePreviewItem}>
+                              {code}
                             </Text>
                           ))}
                           {uploadedVoters.length > 5 && (
@@ -1527,7 +1428,7 @@ export default function CreatePollScreen() {
                   {fileParseError && <View><Text style={styles.errorText}>{fileParseError}</Text></View>}
                   {!fileParseError && voterEmailDuplicates.length > 0 && (
                     <View><Text style={styles.errorText}>
-                      This file has duplicate emails - each voter needs a unique email.
+                      This file has duplicate codes - each voter needs a unique code.
                     </Text></View>
                   )}
                 </View>
@@ -1569,7 +1470,6 @@ export default function CreatePollScreen() {
     </ReusableScreen>
   );
 }
-
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -1845,8 +1745,6 @@ const styles = StyleSheet.create({
 
   voterRow: { marginBottom: 10 },
   voterRowInputs: { flexDirection: "row", gap: 8 },
-  voterInputName: { flex: 1.4 },
-  voterInputCode: { flex: 1 },
   voterRowEmailWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
   voterInputEmail: { flex: 1 },
   removeVoterBtn: { padding: 2 },

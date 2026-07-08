@@ -70,62 +70,50 @@
 
 ---
 
-## 🗂️ Data Architecture
+## Current Data Architecture
 
 ```
-CREATOR_DB
-  └── {creatorEmail}
-        ├── name: string
-        ├── email: string
-        ├── status: "active" | "inactive"
-        ├── createdAt: timestamp
-        ├── dateCreated: string    // e.g. "2026-06-28"
-        └── timeCreated: string    // e.g. "17:35"
+ CREATOR_DB ──── {creatorEmail} ────┬── creatorName: string
+                                    ├── creatorEmail: string
+                                    ├── status: "active" | "inactive"
+                                    ├── dateCreated: string
+                                    └── timeCreated: string
 
+     POLL_TITLE_DB ── {pollId} ──┬── pollId: string
+                                 ├── title: string
+                                 ├── pollType: "single" | "multiple"
+                                 ├── requires_voters_validation: "true" | "false"
+                                 ├── isAnonymous: boolean
+                                 ├── logoUrl: string
+                                 ├── showResults: boolean
+                                 ├── deadline: string | null      // ISO 8601
+                                 ├── status: "active" | "closed"
+                                 ├── poll_verification_status: "verified" | "not_verified"
+                                 ├── aspirantCount: number
+                                 ├── creatorEmail: string
+                                 ├── creatorName: string
+                                 ├── createdAt: timestamp
+                                 ├── dateCreated: string
+                                 └── timeCreated: string
 
-POLL_TITLE_DB
-  └── {creatorEmail}
-        └── polls/
-              └── {pollId}
-                    ├── pollId: string
-                    ├── title: string
-                    ├── pollType: "single" | "multiple"
-                    ├── requires_voters_validation: "true" | "false"
-                    ├── isAnonymous: boolean
-                    ├── logoUrl: ""
-                    ├── showResults: boolean
-                    ├── deadline: string | null   // ISO 8601
-                    ├── status: "active" | "closed"
-                    ├── poll_verification_status: "verified" | "not_verified"
-                    ├── aspirantCount: number
-                    ├── creatorEmail: string
-                    ├── creatorName: string
-                    ├── createdAt: timestamp
-                    ├── dateCreated: string
-                    └── timeCreated: string
+       ASPIRANTS_DETAILS_DB ── {pollId} ──┬── pollId: string
+                                          ├── aspirantEmail: string
+                                          ├── name: string
+                                          ├── photo: string | ""
+                                          ├── votes: number
+                                          ├── lastVotedAt: timestamp
+                                          ├── creatorEmail: string
+                                          └── addedAt: timestamp
 
+ VALIDATED_VOTERS_DB ── {pollId} ──┬── validCodes: string[]
 
-ASPIRANTS_DETAILS_DB
-  └── {creatorEmail}
-        └── {pollId}/
-              └── {aspirantEmail}
-                    ├── name: string
-                    ├── email: string
-                    ├── photo: string | ""
-                    ├── votes: number
-                    ├── lastVotedAt: timestamp | null
-                    ├── creatorEmail: string
-                    └── addedAt: timestamp
-
-
-VOTERS_DB
-  └── {voterEmail}
-        └── {pollId}/
-              └── receipt
-                    ├── pollTitle: string
-                    ├── creatorEmail: string
-                    ├── aspirantVoted: string | string[]
-                    └── votedAt: timestamp
+ VOTERS_DB ── {pollId} ──┬── aspirantVoted: string[]
+						 ├── creatorEmail: string
+						 ├── pollId: string
+						 ├── pollTitle: string
+						 ├── voterEmail: string
+						 ├── votersName: string
+						 ├── votedAt: timestamp
 ```
 
 ---

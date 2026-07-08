@@ -104,7 +104,7 @@ const MemberListItem = React.memo(function MemberListItem({
 
       <View style={itemStyles.textBlock}>
         <Text numberOfLines={1} style={itemStyles.name}>
-          {isCurrentUser ? "You: " : ""}<Text style={{ fontSize: 15 }}>{item.clientName}</Text>
+          {isCurrentUser ? "You: " : ""}<Text style={{ fontSize: 16 }}>{item.clientName}</Text>
         </Text>
         <View style={itemStyles.metaRow}>
           <Text numberOfLines={1} style={itemStyles.email}>{truncateMiddle(item?.email, 0, 17)}</Text>

@@ -1,21 +1,23 @@
 //PrivacyPolicy&TermsOfUse
 import React from "react";
-import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { View, Text, ScrollView, StyleSheet, Platform } from "react-native";
 import ReusableScreen from "@/components/ReusableScreen";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 
 /* ── Brand Tokens ── */
 const T = {
-  brand: "#26B865",  // primary green from logo
-  brandDeep: "#1A8A4A",  // dark green
+  brand: "#26B865",       // primary green from logo
+  brandDeep: "#1A8A4A",   // dark green
+  brandDeeper: "#146639", // deeper green for footer text / accents
   brandLight: "#E8F5ED",  // very light mint
-  brandBorder: "#A8DDB5",  // soft mint border
+  brandBorder: "#A8DDB5", // soft mint border
   brandMuted: "#6FCF97",  // muted green
   white: "#FFFFFF",
-  ink: "#1A2E22",  // very dark green-black
+  ink: "#1A2E22",         // very dark green-black
   inkSoft: "#374151",
   inkMuted: "#6B7280",
+  cardBg: "#FAFEFC",
 };
 
 export default function PolicyTermsScreen() {
@@ -25,7 +27,13 @@ export default function PolicyTermsScreen() {
       {/* ===== FIXED HEADER ===== */}
       <View style={styles.fixedHeader}>
         <View style={styles.headerRow}>
-          <Ionicons name="arrow-back" size={22} color={T.white} onPress={() => router.back()} />
+          <Ionicons
+            name="arrow-back"
+            size={22}
+            color={T.white}
+            onPress={() => router.back()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          />
           <Text style={styles.headerTitle}>Privacy Policy & Terms of Use</Text>
         </View>
         <Text style={styles.subHeader}>eVoting System Pro</Text>
@@ -46,11 +54,12 @@ export default function PolicyTermsScreen() {
             </View>
             <Text style={styles.sectionTitle}>Privacy Policy</Text>
           </View>
+          <View style={styles.titleDivider} />
 
           <View style={styles.metaBox}>
-            <Text style={styles.metaText}><Text style={styles.bold}>Effective Date:</Text> November 2, 2025</Text>
-            <Text style={styles.metaText}><Text style={styles.bold}>Developer:</Text> eVoting System Pro Limited</Text>
-            <Text style={styles.metaText}><Text style={styles.bold}>Contact:</Text> stanleyafon@gmail.com | +233 543 171 076</Text>
+            <MetaRow label="Effective Date" value="November 2, 2026" />
+            <MetaRow label="Developer" value="eVoting System Pro Limited" />
+            <MetaRow label="Contact" value="stanleyafon@gmail.com | +233 543 171 076" />
           </View>
 
           <SectionHeader title="1. Introduction" />
@@ -156,11 +165,12 @@ export default function PolicyTermsScreen() {
             </View>
             <Text style={styles.sectionTitle}>Terms & Conditions</Text>
           </View>
+          <View style={styles.titleDivider} />
 
           <View style={styles.metaBox}>
-            <Text style={styles.metaText}><Text style={styles.bold}>Effective Date:</Text> November 2, 2025</Text>
-            <Text style={styles.metaText}><Text style={styles.bold}>Developer:</Text> eVoting System Pro Limited</Text>
-            <Text style={styles.metaText}><Text style={styles.bold}>Contact:</Text> stanleyafon@gmail.com | +233 543 171 076</Text>
+            <MetaRow label="Effective Date" value="November 2, 2026" />
+            <MetaRow label="Developer" value="eVoting System Pro Limited" />
+            <MetaRow label="Contact" value="stanleyafon@gmail.com | +233 543 171 076" />
           </View>
 
           <SectionHeader title="1. Acceptance of Terms" />
@@ -284,7 +294,7 @@ export default function PolicyTermsScreen() {
 
       {/* ===== FIXED FOOTER ===== */}
       <View style={styles.fixedFooter}>
-        <Text style={styles.footerText}>© 2025 eVoting System Pro</Text>
+        <Text style={styles.footerText}>© 2026 eVoting System Pro</Text>
         <Text style={styles.footerSubText}>Empowering Communities to Vote with Precision</Text>
       </View>
 
@@ -302,14 +312,25 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+/* ── Reusable meta row (label / value chip) ── */
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metaRow}>
+      <Text style={styles.metaLabel}>{label}</Text>
+      <Text style={styles.metaValue}>{value}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   scrollArea: {
     flex: 1,
-    marginTop: 80,
-    marginBottom: 60,
+    marginTop: 84,
+    marginBottom: 66,
   },
   scrollContent: {
     padding: 16,
+    paddingTop: 4,
     gap: 16,
   },
 
@@ -317,11 +338,16 @@ const styles = StyleSheet.create({
   fixedHeader: {
     position: "absolute",
     top: 0, left: 0, right: 0,
-    paddingVertical: 14,
+    paddingTop: Platform.OS === "ios" ? 50 : 18,
+    paddingBottom: 14,
     paddingHorizontal: 16,
-    backgroundColor: "#26B865",
+    backgroundColor: T.brand,
     zIndex: 999,
     elevation: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
   },
   headerRow: {
     flexDirection: "row",
@@ -331,12 +357,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 16,
     fontWeight: "800",
-    color: "#fff",
+    color: T.white,
     flex: 1,
   },
   subHeader: {
     fontSize: 12,
-    color: "rgba(255,255,255,0.80)",
+    color: "rgba(255,255,255,0.85)",
     marginTop: 2,
     fontWeight: "600",
     paddingLeft: 32,
@@ -347,63 +373,86 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 0, left: 0, right: 0,
     paddingVertical: 12,
-    backgroundColor: "#26B865",
+    backgroundColor: T.white,
+    borderTopWidth: 1,
+    borderTopColor: T.brandBorder,
     zIndex: 999,
     elevation: 6,
     alignItems: "center",
   },
   footerText: {
-    color: "#fff",
+    color: T.brandDeeper,
     fontSize: 13,
     fontWeight: "700",
   },
   footerSubText: {
-    color: "rgba(255,255,255,0.80)",
+    color: T.inkMuted,
     fontSize: 11,
     marginTop: 2,
   },
 
   /* ── Section boxes ── */
   sectionBox: {
-    backgroundColor: "#F0FDF4",
+    backgroundColor: T.cardBg,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#A8DDB5",
+    borderColor: T.brandBorder,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
   sectionTitleRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    marginBottom: 14,
   },
   sectionIconWrap: {
     width: 34, height: 34,
     borderRadius: 10,
-    backgroundColor: "#26B865",
+    backgroundColor: T.brandDeep,
     alignItems: "center",
     justifyContent: "center",
   },
   sectionTitle: {
     fontSize: 19,
     fontWeight: "800",
-    color: "#1A8A4A",
+    color: T.brandDeep,
+    letterSpacing: 0.2,
+  },
+  titleDivider: {
+    height: 1,
+    backgroundColor: T.brandBorder,
+    marginTop: 12,
+    marginBottom: 14,
   },
 
   /* ── Meta info box ── */
   metaBox: {
-    backgroundColor: "#E8F5ED",
+    backgroundColor: T.brandLight,
     borderRadius: 10,
     padding: 12,
     marginBottom: 14,
     borderLeftWidth: 3,
-    borderLeftColor: "#26B865",
-    gap: 3,
+    borderLeftColor: T.brand,
+    gap: 6,
   },
-  metaText: {
-    fontSize: 13,
-    color: "#374151",
-    lineHeight: 20,
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  metaLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: T.brandDeep,
+    marginRight: 4,
+  },
+  metaValue: {
+    fontSize: 12.5,
+    color: T.inkSoft,
+    flexShrink: 1,
   },
 
   /* ── Section headers ── */
@@ -415,24 +464,24 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   sectionHeaderDot: {
-    width: 8, height: 8,
+    width: 7, height: 7,
     borderRadius: 4,
-    backgroundColor: "#26B865",
+    backgroundColor: T.brand,
   },
   sectionHeader: {
-    fontSize: 14,
+    fontSize: 14.5,
     fontWeight: "700",
-    color: "#1A8A4A",
+    color: T.brandDeep,
   },
 
   /* ── Body text ── */
   text: {
     fontSize: 13.5,
     lineHeight: 22,
-    color: "#374151",
+    color: T.inkSoft,
   },
   bold: {
     fontWeight: "700",
-    color: "#1A2E22",
+    color: T.ink,
   },
 });

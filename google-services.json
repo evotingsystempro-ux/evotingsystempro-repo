@@ -15,7 +15,15 @@
       },
       "oauth_client": [
         {
-          "client_id": "570014654568-amssh3p5253946ptbgk4c4r2ms7j0ssn.apps.googleusercontent.com",
+          "client_id": "570014654568-bd7rk1hb3i5b11n56mhmecb3u8tl4qpj.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.developershandle.evotingsystempro",
+            "certificate_hash": "e4bf9d57ee32d83d174b39bc03051e6fce724774"
+          }
+        },
+        {
+          "client_id": "570014654568-u4mq175q6rkrq05beem907b3racvjv31.apps.googleusercontent.com",
           "client_type": 3
         }
       ],

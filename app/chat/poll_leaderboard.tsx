@@ -10,6 +10,7 @@ import {
     RefreshControl,
     Image,
     Platform,
+    TextInput,
 } from "react-native";
 import { AntDesign, Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -21,8 +22,7 @@ import {
     collection, onSnapshot, increment, serverTimestamp,
     query,
     where,
-    limit,
-    getDocs,
+    runTransaction,
 } from "firebase/firestore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ interface Poll {
     pollId: string;
     title: string;
     pollType: "single" | "multiple";
-    requires_voters_validation: boolean;
+    requires_voters_validation: "true" | "false";
     poll_verification_status?: "verified" | "not_verified";   // ← NEW
     isAnonymous: boolean;
     showResults: boolean;
@@ -142,31 +142,41 @@ export default function PollLeaderboardScreen() {
       }, []); */
 
     // ── Poll metadata (live) ──────────────────────────────────────────────────
+    // POLL_TITLE_DB is now a flat top-level collection keyed by {pollId} —
+    // creatorEmail/creatorName are denormalized fields on the doc, not path
+    // segments, so we no longer need creatorEmail to build this path.
 
     useEffect(() => {
-        if (!pollId || !creatorEmail) return;
+        if (!pollId) return;
         return onSnapshot(
-            doc(db, "POLL_TITLE_DB", creatorEmail, "polls", pollId),
+            doc(db, "POLL_TITLE_DB", pollId),
             (snap) => {
                 if (snap.exists()) setPoll(snap.data() as Poll);
                 setLoadingPoll(false);
             },
             (err) => { console.error("poll listener:", err); setLoadingPoll(false); }
         );
-    }, [pollId, creatorEmail]);
+    }, [pollId]);
 
     // ── Aspirants (live) ──────────────────────────────────────────────────────
+    // ASPIRANTS_DETAILS_DB is now a flat top-level collection with composite
+    // doc IDs ({pollId}_{aspirantEmail}), so we query by the pollId field
+    // instead of reading a creatorEmail/pollId subcollection.
 
     useEffect(() => {
-        if (!pollId || !creatorEmail) return;
+        if (!pollId) return;
+        const aspirantsQuery = query(
+            collection(db, "ASPIRANTS_DETAILS_DB"),
+            where("pollId", "==", pollId)
+        );
         return onSnapshot(
-            collection(db, "ASPIRANTS_DETAILS_DB", creatorEmail, pollId),
+            aspirantsQuery,
             (snap) => {
                 setAspirants(snap.docs.map(d => {
                     const data = d.data();
                     const raw = data.lastVotedAt;
                     return {
-                        email: data.email ?? d.id,
+                        email: data.aspirantEmail ?? d.id,
                         name: data.name ?? d.id,
                         photo: data.photo ?? "",
                         votes: data.votes ?? 0,
@@ -178,15 +188,15 @@ export default function PollLeaderboardScreen() {
             },
             (err) => { console.error("aspirants listener:", err); setLoadingAspirants(false); }
         );
-    }, [pollId, creatorEmail]);
+    }, [pollId]);
 
     // ── Load my existing vote(s) ──────────────────────────────────────────────
-    // Path: VOTERS_DB/{voterEmail}/{pollId}/receipt
+    // Path: VOTERS_DB/{pollId}_{voterEmail}   (flat, composite doc ID)
 
     const loadMyVotes = useCallback(async () => {
         if (!rawUserEmail || !pollId) return;
         try {
-            const snap = await getDoc(doc(db, "VOTERS_DB", rawUserEmail, pollId, "receipt"));
+            const snap = await getDoc(doc(db, "VOTERS_DB", `${pollId}_${rawUserEmail}`));
             if (snap.exists()) {
                 const data = snap.data();
                 const voted = data?.aspirantVoted;
@@ -220,52 +230,32 @@ export default function PollLeaderboardScreen() {
 
 
     // ------- VOTER VALIDATION ------
+    // NOTE: VALIDATED_VOTERS_DB is a separate pre-approval list — distinct
+    // from VOTERS_DB above, which records votes actually cast. Per the
+    // updated schema it's a SINGLE doc per poll holding a flat array:
+    //   VALIDATED_VOTERS_DB/{pollId} → { validCodes: string[] }
+    // Every code in validCodes was lowercased & trimmed when the poll
+    // creator saved it, so we match by doing the same normalization here.
 
-    const sanitizeDocId = (raw: string) => {
-        const cleaned = raw.trim().replace(/\//g, "-").replace(/\s+/g, " ");
-        return cleaned.length ? cleaned : "";
-    };
-
-    const isValidEmail = (value: string) =>
-        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+    const sanitizeVoterCode = (raw: string) => raw.trim().toLowerCase();
 
     const checkVoterValidated = async (
-        creatorEmail: string,
         pollId: string,
         idOrEmail: string
     ): Promise<boolean> => {
         const trimmed = idOrEmail.trim();
-        if (!creatorEmail || !pollId || !trimmed) return false;
+        if (!pollId || !trimmed) return false;
 
-        const votersCollection = collection(
-            db,
-            "VALIDATED_VOTERS_DB",
-            creatorEmail,
-            pollId
-        );
+        try {
+            const snap = await getDoc(doc(db, "VALIDATED_VOTERS_DB", pollId));
+            if (!snap.exists()) return false;
 
-        // 1. Try as a doc ID (voter code / index no.) — documents are keyed by
-        //    sanitizeDocId(code), same as when the poll creator uploaded/entered
-        //    the list.
-        const codeId = sanitizeDocId(trimmed);
-        if (codeId) {
-            const codeSnap = await getDoc(doc(votersCollection, codeId));
-            if (codeSnap.exists()) return true;
+            const validCodes: string[] = snap.data()?.validCodes ?? [];
+            return validCodes.includes(sanitizeVoterCode(trimmed));
+        } catch (err) {
+            console.error("checkVoterValidated:", err);
+            return false;
         }
-
-        // 2. Fall back to matching on the "email" field (case-insensitive, since
-        //    emails are stored lowercased on write).
-        if (isValidEmail(trimmed)) {
-            const emailQuery = query(
-                votersCollection,
-                where("email", "==", trimmed.toLowerCase()),
-                limit(1)
-            );
-            const emailSnap = await getDocs(emailQuery);
-            if (!emailSnap.empty) return true;
-        }
-
-        return false;
     };
 
     // const pollId = "POLL_1782998497301_A8AIA";
@@ -281,8 +271,8 @@ export default function PollLeaderboardScreen() {
         setLockedIndices(prev => new Set(prev).add(index));
 
 
-        if (!pollId || !creatorEmail) {
-            console.log("Missing pollId or creatorEmail — cannot validate voter.");
+        if (!pollId) {
+            console.log("Missing pollId — cannot validate voter.");
 
             return;
         }
@@ -290,7 +280,6 @@ export default function PollLeaderboardScreen() {
         if (!idOrEmail.trim()) return;
         try {
             const isVoterValidated = await checkVoterValidated(
-                String(creatorEmail),
                 String(pollId),
                 idOrEmail
             );
@@ -319,7 +308,7 @@ export default function PollLeaderboardScreen() {
             return;
         }
 
-        if (poll.requires_voters_validation === true && !isVoterValidated) {
+        if (poll.requires_voters_validation === "true" && !isVoterValidated) {
             setLockedIndices(new Set());
             setWait_checking_voter_validation("You can't vote in this poll");
             setLockedIndices(prev => new Set(prev).add(index));
@@ -332,10 +321,11 @@ export default function PollLeaderboardScreen() {
 
         setTogglingEmailSafe(aspirantEmail);
 
+        // ASPIRANTS_DETAILS_DB is flat — composite doc ID {pollId}_{email}
         const aspirantRef = (email: string) =>
-            doc(db, "ASPIRANTS_DETAILS_DB", creatorEmail, pollId, email);
+            doc(db, "ASPIRANTS_DETAILS_DB", `${pollId}_${email}`);
 
-        const voterDocRef = doc(db, "VOTERS_DB", rawUserEmail, pollId, "receipt");
+        const voterDocRef = doc(db, "VOTERS_DB", `${pollId}_${rawUserEmail}`);
 
         try {
             if (hasVotedThis) {
@@ -348,6 +338,9 @@ export default function PollLeaderboardScreen() {
                 const next = current.filter(e => e !== aspirantEmail);
 
                 await setDoc(voterDocRef, {
+                    pollId,
+                    voterEmail: rawUserEmail,
+                    votersName: userName || "Unknown",
                     pollTitle: poll.title,
                     creatorEmail,
                     aspirantVoted: next[0] ?? null,
@@ -374,6 +367,9 @@ export default function PollLeaderboardScreen() {
                 const next = [aspirantEmail];
 
                 await setDoc(voterDocRef, {
+                    pollId,
+                    voterEmail: rawUserEmail,
+                    votersName: userName || "Unknown",
                     pollTitle: poll.title,
                     creatorEmail,
                     aspirantVoted: aspirantEmail,
@@ -393,55 +389,143 @@ export default function PollLeaderboardScreen() {
         }
     };
 
-    // ── Repeatable vote — MULTIPLE-VOTE POLLS ONLY (new) ──────────────────────
-    // A voter can press "+" on the SAME aspirant as many times as they like
-    // (e.g. 20 votes for X, then 50 votes for Y). "−" removes one vote at a
-    // time from that aspirant, down to a minimum of 0.
+    // ── Free removal — MULTIPLE-VOTE POLLS ONLY ───────────────────────────────
+    // The "−" button removes one previously-cast vote from an aspirant, down
+    // to a minimum of 0. This does NOT issue a refund — it only corrects the
+    // voter's own tally. Adding votes is a PAID action, handled below.
 
-    const handleMultiVote = async (aspirantEmail: string, delta: 1 | -1) => {
-        if (!poll || !rawUserEmail || !pollId || !creatorEmail) {
-            Alert.alert("Not ready", "Please wait a moment and try again.");
-            return;
-        }
 
-        if (togglingEmailRef.current) return;
+    // ── Paid multi-vote — MULTIPLE-VOTE POLLS ONLY ────────────────────────────
 
-        if (poll.status === "closed" || isExpired(poll.deadline)) {
-            Alert.alert("Poll closed", "This poll is no longer accepting votes.");
-            return;
-        }
+    const VOTE_PRICE_GHS = 1.0;
 
-        const current = votedEmailsRef.current;
-        const myCountForThis = countFor(current, aspirantEmail);
+    // Which aspirant's "enter quantity + pay" panel is currently open
+    const [payingFor, setPayingFor] = useState<string | null>(null);
+    const [voteQty, setVoteQty] = useState<string>("1");
+    const [isPaying, setIsPaying] = useState(false);
 
-        // Can't remove a vote that doesn't exist
-        if (delta === -1 && myCountForThis === 0) return;
-
-        setTogglingEmailSafe(aspirantEmail);
-
-        const aspirantRef = doc(db, "ASPIRANTS_DETAILS_DB", creatorEmail, pollId, aspirantEmail);
-        const voterDocRef = doc(db, "VOTERS_DB", rawUserEmail, pollId, "receipt");
+    // ── Wallet-based charge ────────────────────────────────────────────────
+    // Reads the voter's WALLET_DB/{voterEmail} doc and, only if
+    // current_balance covers the cost, atomically deducts the balance AND
+    // increments the aspirant's vote count in a single Firestore transaction
+    // — so a balance can never be spent twice by two rapid taps, and votes
+    // can never be added without the matching deduction succeeding.
+    const chargeWalletAndVote = async (
+        voterEmail: string,
+        aspirantEmail: string,
+        quantity: number,
+        amountGHS: number
+    ): Promise<{ success: boolean; reason?: "insufficient_funds" | "no_wallet" | "error" }> => {
+        const walletRef = doc(db, "WALLET_DB", voterEmail);
+        // ASPIRANTS_DETAILS_DB is flat — composite doc ID {pollId}_{aspirantEmail}
+        const aspirantRef = doc(db, "ASPIRANTS_DETAILS_DB", `${pollId}_${aspirantEmail}`);
 
         try {
-            await updateDoc(aspirantRef, {
-                votes: increment(delta),
-                lastVotedAt: serverTimestamp(),
+            await runTransaction(db, async (tx) => {
+                const walletSnap = await tx.get(walletRef);
+
+                if (!walletSnap.exists()) {
+                    throw new Error("no_wallet");
+                }
+
+                const walletData = walletSnap.data() as any;
+                const currentBalance =
+                    typeof walletData.current_balance === "number" ? walletData.current_balance : 0;
+
+                if (currentBalance < amountGHS) {
+                    throw new Error("insufficient_funds");
+                }
+
+                const newBalance = currentBalance - amountGHS;
+
+                tx.update(walletRef, {
+                    previous_balance: currentBalance,
+                    current_balance: newBalance,
+                    transaction_amount: amountGHS,
+                    transaction_type: "vote_payment",
+                    updatedAt: serverTimestamp(),
+                });
+
+                tx.update(aspirantRef, {
+                    votes: increment(quantity),
+                    lastVotedAt: serverTimestamp(),
+                });
             });
 
-            let next: string[];
-            if (delta === 1) {
-                // Add another vote for this aspirant — duplicates are allowed
-                next = [...current, aspirantEmail];
-            } else {
-                // Remove exactly one occurrence of this aspirant
-                next = [...current];
-                const removeIdx = next.lastIndexOf(aspirantEmail);
-                if (removeIdx !== -1) next.splice(removeIdx, 1);
+            return { success: true };
+
+        } catch (err: any) {
+            const reason =
+                err?.message === "insufficient_funds" ? "insufficient_funds" :
+                    err?.message === "no_wallet" ? "no_wallet" :
+                        "error";
+
+            if (reason === "error") console.error("chargeWalletAndVote error:", err);
+            return { success: false, reason };
+        }
+    };
+
+    const handlePayAndVote = async (aspirantEmail: string, index: number) => {
+
+        setLockedIndices(new Set());
+        setWait_checking_voter_validation("Loading...");
+        setLockedIndices(prev => new Set(prev).add(index));
+
+        if (!poll || !rawUserEmail || !pollId || !creatorEmail) {
+            setWait_checking_voter_validation("Wait...");
+            return;
+        }
+
+        if (poll.status === "closed" || isExpired(poll.deadline)) {
+            setWait_checking_voter_validation("Poll closed...");
+            return;
+        }
+
+        const quantity = parseInt(voteQty, 10);
+        if (!Number.isInteger(quantity) || quantity < 1) {
+            // Alert.alert("Invalid quantity", "Enter a whole number of votes (1 or more).");
+            setWait_checking_voter_validation("Enter a whole number");
+            return;
+        }
+
+        const amount = quantity * VOTE_PRICE_GHS;
+
+        setIsPaying(true);
+        setTogglingEmailSafe(aspirantEmail);
+
+        try {
+            const result = await chargeWalletAndVote(rawUserEmail, aspirantEmail, quantity, amount);
+
+            if (!result.success) {
+                if (result.reason === "insufficient_funds") {
+                    /*  Alert.alert(
+                         "Not enough funds",
+                         `Your wallet balance is too low for GHS ${amount.toFixed(2)}. Please load your wallet and try again.`
+                     ); */
+                    setWait_checking_voter_validation("Insuficient balance");
+                } else if (result.reason === "no_wallet") {
+                    /*   Alert.alert(
+                          "Wallet not found",
+                          "You don't have a wallet set up yet. Please load your wallet and try again."
+                      ); */
+                    setWait_checking_voter_validation("Wallet not found");
+                } else {
+                    //   Alert.alert("Payment failed", "Your payment could not be processed. Please try again.");
+                    setWait_checking_voter_validation("Payment failed");
+                }
+                return;
             }
 
-            // Overwrite the whole array — arrayUnion/arrayRemove would dedupe
-            // and break the "vote many times for the same aspirant" feature.
+            // Wallet deduction + vote increment already succeeded atomically —
+            // now just record the receipt for this voter.
+            const voterDocRef = doc(db, "VOTERS_DB", `${pollId}_${rawUserEmail}`);
+            const current = votedEmailsRef.current;
+            const next = [...current, ...Array(quantity).fill(aspirantEmail)];
+
             await setDoc(voterDocRef, {
+                pollId,
+                voterEmail: rawUserEmail,
+                votersName: userName || "Unknown",
                 pollTitle: poll.title,
                 creatorEmail,
                 aspirantVoted: next,
@@ -449,11 +533,23 @@ export default function PollLeaderboardScreen() {
             }, { merge: true });
 
             syncVotedEmails(next);
+
+            /*  Alert.alert(
+                 "Vote completed",
+                 `Payment of GHS ${amount.toFixed(2)} succeeded — ${quantity} vote${quantity !== 1 ? "s" : ""} cast.`
+             ); */
+            setWait_checking_voter_validation("");
+
+            setPayingFor(null);
+            setVoteQty("1");
+
         } catch (err: any) {
-            console.error("handleMultiVote error:", err);
-            Alert.alert("Vote failed", err?.message ?? "Could not update vote. Please try again.");
+            console.error("handlePayAndVote error:", err);
+            // Alert.alert("Payment failed", err?.message ?? "Could not process payment. Please try again.");
+            setWait_checking_voter_validation("Cant process pay now..");
             await loadMyVotes();
         } finally {
+            setIsPaying(false);
             setTogglingEmailSafe(null);
         }
     };
@@ -462,7 +558,7 @@ export default function PollLeaderboardScreen() {
 
     const sortedRef = useRef<Aspirant[]>([]);
 
-    // ── Derived ───────────────────────────────────────────────────
+    // ── Derived ─────────────────────────── ──── ─── ─── ───
 
     const alreadyVoted = votedEmails.length > 0;
     const expired = isExpired(poll?.deadline ?? null);
@@ -479,7 +575,7 @@ export default function PollLeaderboardScreen() {
         return next;
     })();
 
-    // ── Loading ───────────────────────────────────────────────
+    // ── Loading ──────────────────────────────── ──── ─── ────
 
     if (loading) {
 
@@ -508,7 +604,7 @@ export default function PollLeaderboardScreen() {
         );
     }
 
-    // ── Render ───────────<Text style={[styles.pollTitle, { flex: 1, }]} ellipsizeMode="tail" numberOfLines={2}>─────────────────────────
+    // ── Render ─────── <Text style={[styles.pollTitle, { flex: 1, }]} ellipsizeMode="tail" numberOfLines={2}> ───────────────
 
     return (
         <ReusableScreen>
@@ -526,7 +622,7 @@ export default function PollLeaderboardScreen() {
                     </Text>
 
                     <View style={styles.footerMeta}>
-                        <Text style={styles.footerMetaText}>Creator: {poll.creatorName},</Text>
+                        <Text style={styles.footerMetaText}> Creator: {poll.creatorName},</Text>
 
                         {poll.isAnonymous && (
                             <View style={styles.anonBadge}>
@@ -542,7 +638,6 @@ export default function PollLeaderboardScreen() {
                         </View>
                     </View>
                 </View>
-
             </View>
 
             {/* Status row */}
@@ -554,7 +649,7 @@ export default function PollLeaderboardScreen() {
                     </Text>
                 </View>
 
-                {poll.requires_voters_validation === true ? (
+                {poll.requires_voters_validation === "true" ? (
                     <View style={{ paddingHorizontal: 9, paddingVertical: 3, borderRadius: 20, backgroundColor: "#EAF6EE", flexDirection: "row", alignItems: "center", gap: 4 }}>
                         <MaterialIcons name="verified" size={12} color="#3abf1fff" />
                         <Text style={{ color: "#299114ff", fontSize: 14, fontWeight: "500" }}>
@@ -596,7 +691,7 @@ export default function PollLeaderboardScreen() {
                     <Text style={styles.metaChipText}>
                         {aspirants.length} aspirant{aspirants.length !== 1 ? "s" : ""}
                     </Text>
-                </View>
+                </View>{/* 
                 {poll.pollType === "multiple" && myTotalVotesCast > 0 && (
                     <View style={styles.metaChip}>
                         <Ionicons name="person-outline" size={14} color="#6b7280" />
@@ -604,7 +699,7 @@ export default function PollLeaderboardScreen() {
                             You've cast {myTotalVotesCast} vote{myTotalVotesCast !== 1 ? "s" : ""}
                         </Text>
                     </View>
-                )}
+                )} */}
                 {poll.deadline && (
                     <View style={styles.metaChip}>
                         <Text style={styles.metaChipText}>, End date: </Text>
@@ -677,29 +772,25 @@ export default function PollLeaderboardScreen() {
                                 const rankLabel = RANK_LABELS[index] ?? `${index + 1}th`;
                                 const avatarColor = AVATAR_COLORS[index % AVATAR_COLORS.length];
                                 const isVoted = lockedIndices.has(index);
+                                const isPayingForThis = payingFor === asp.email;
+                                const parsedQty = parseInt(voteQty, 10);
 
                                 return (
                                     <View key={asp.email} style={styles.card}>
                                         {/* Top row */}
                                         <View style={styles.cardTopRow}>
 
-                                            <View>
+                                            <View style={styles.pollLogoWrapper}>
                                                 <Image
                                                     source={require("@/assets/images/userImagePlaceHolder.png")}
                                                     style={styles.avatarPlaceholder}
                                                     resizeMode="contain"
                                                 />
-                                                {asp.photo && asp.photo.length > 10 ? (
-
-
-                                                    <View style={styles.pollLogoWrapper}>
-                                                        <Image
-                                                            source={{ uri: asp.photo }}
-                                                            style={styles.pollLogoInner}
-                                                            resizeMode="cover"
-                                                        />
-                                                    </View>
-                                                ) : (
+                                                {asp.photo ? (<Image
+                                                    source={{ uri: asp.photo }}
+                                                    style={styles.pollLogoInner}
+                                                    resizeMode="cover"
+                                                />) : (
                                                     <View style={[styles.avatar, { backgroundColor: asp.photo || avatarColor }]}>
                                                         <Text style={styles.avatarText}>
                                                             {asp.name?.charAt(0).toUpperCase() ?? '?'}
@@ -731,10 +822,16 @@ export default function PollLeaderboardScreen() {
                                                 <View><Text style={styles.pointsLabel}>Votes</Text></View>
                                             </View>
 
-                                            <View style={{ flexDirection: "row", alignItems: "center", }}>
-                                                <View style={{ flexDirection: "row", alignItems: "center", width: 100, justifyContent: "flex-end" }}>
+                                            <View style={styles.rightGroup}>
+                                                <View style={styles.statusMsgWrap}>
                                                     {isVoted && (
-                                                        <Text style={[styles.alreadyVotedText, { color: wait_checking_voter_validation === "Vote successful" ? "#1F9F4E" : "#ef4444" }]}>{wait_checking_voter_validation}</Text>
+                                                        <Text
+                                                            style={[styles.alreadyVotedText, { color: wait_checking_voter_validation === "Vote successful" ? "#1F9F4E" : "#ef4444" }]}
+                                                            numberOfLines={1}
+                                                            ellipsizeMode="tail"
+                                                        >
+                                                            {!isMultiple && wait_checking_voter_validation}
+                                                        </Text>
                                                     )}
                                                 </View>
 
@@ -767,45 +864,86 @@ export default function PollLeaderboardScreen() {
                                                         )}
                                                     </View>
                                                 ) : (
-                                                    // ── MULTIPLE-VOTE: repeatable +/- voting (new) ──────────
+                                                    // ── MULTIPLE-VOTE: free "−" removal, paid "+" via pay panel ──
                                                     <View style={styles.multiVoteRow}>
-                                                        <TouchableOpacity
-                                                            onPress={() => handleMultiVote(asp.email, -1)}
-                                                            disabled={!canVote || !!togglingEmailRef.current || myCountForThis === 0}
-                                                            activeOpacity={0.7}
-                                                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                                                            style={[styles.multiVoteBtn, myCountForThis === 0 && styles.multiVoteBtnDisabled]}
-                                                        >
-                                                            <Ionicons name="remove" size={16} color={myCountForThis === 0 ? "#d1d5db" : "#ef4444"} />
-                                                        </TouchableOpacity>
 
-                                                        {isToggling ? (
-                                                            <ActivityIndicator size="small" color="#1F9F4E" style={{ width: 28 }} />
-                                                        ) : (
-                                                            <Text
-                                                                style={[
-                                                                    styles.thumbCount,
-                                                                    myCountForThis > 0 && styles.thumbCountActive,
-                                                                    { width: 22, textAlign: "center" },
-                                                                ]}
-                                                            >
-                                                                {myCountForThis}
-                                                            </Text>
+                                                        {isToggling && (
+                                                            <ActivityIndicator size="small" color="#1F9F4E" style={{ width: 24 }} />
                                                         )}
 
                                                         <TouchableOpacity
-                                                            onPress={() => handleMultiVote(asp.email, 1)}
+                                                            onPress={() => {
+                                                                if (!canVote) return;
+                                                                setPayingFor(isPayingForThis ? null : asp.email);
+                                                                setVoteQty("1");
+                                                            }}
                                                             disabled={!canVote || !!togglingEmailRef.current}
                                                             activeOpacity={0.7}
                                                             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                                             style={styles.multiVoteBtn}
                                                         >
-                                                            <Ionicons name="add" size={16} color="#1F9F4E" />
+                                                            <AntDesign
+                                                                name="like1"
+                                                                size={18}
+                                                                color={"#999"}
+                                                            />
+
                                                         </TouchableOpacity>
                                                     </View>
                                                 )}
                                             </View>
                                         </View>
+
+                                        {/* Pay panel — MULTIPLE-VOTE only, shown after tapping "+" ─────── */}
+                                        {isMultiple && isPayingForThis && (
+                                            <View style={styles.payPanel}>
+                                                <Text style={styles.payPanelText}>
+                                                    1 vote = GHS 1.00 - enter the number of votes you'd like to cast
+                                                </Text>
+
+                                                <View style={styles.payPanelRow}>
+                                                    <TextInput
+                                                        style={styles.payPanelInput}
+                                                        keyboardType="number-pad"
+                                                        value={voteQty}
+                                                        onChangeText={(t) => setVoteQty(t.replace(/[^0-9]/g, ""))}
+                                                        placeholder="1"
+                                                        editable={!isPaying}
+                                                        maxLength={5}
+                                                    />
+                                                    <Text style={styles.payPanelTotal}>
+                                                        = GHS {((Number.isInteger(parsedQty) ? parsedQty : 0) * VOTE_PRICE_GHS).toFixed(2)}
+                                                    </Text>
+                                                </View>
+
+                                                <View style={styles.payPanelBtnRow}>
+                                                    <View><Text style={{ color: wait_checking_voter_validation === "Payment successul" ? "#22960eff" : "red" }}>{wait_checking_voter_validation}</Text></View>
+                                                    <TouchableOpacity
+                                                        onPress={() => { setPayingFor(null); setVoteQty("1"); }}
+                                                        disabled={isPaying}
+                                                        style={styles.payPanelCancelBtn}
+                                                    >
+                                                        <Text style={styles.payPanelCancelText}>Cancel</Text>
+                                                    </TouchableOpacity>
+
+                                                    <TouchableOpacity
+                                                        onPress={() => handlePayAndVote(asp.email, index)}
+                                                        disabled={isPaying || !Number.isInteger(parsedQty) || parsedQty < 1}
+                                                        style={[
+                                                            styles.payPanelPayBtn,
+                                                            (isPaying || !Number.isInteger(parsedQty) || parsedQty < 1) && styles.payPanelPayBtnDisabled,
+                                                        ]}
+                                                        activeOpacity={0.8}
+                                                    >
+                                                        {isPaying ? (
+                                                            <ActivityIndicator size="small" color="#fff" />
+                                                        ) : (
+                                                            <Text style={styles.payPanelPayText}>Pay</Text>
+                                                        )}
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        )}
                                     </View>
                                 );
                             })}
@@ -878,7 +1016,7 @@ const styles = StyleSheet.create({
         borderWidth: 1, borderColor: "#ddd", marginBottom: 2,
     },
     cardTopRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-    avatar: { width: 45, height: 45, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+    avatar: { width: 55, height: 55, borderRadius: 12, alignItems: "center", justifyContent: "center" },
     avatarText: { color: "#fff", fontWeight: "800", fontSize: 18 },
     cardNameBlock: { flex: 1, gap: 2 },
     cardName: { width: 250, fontSize: 14, fontWeight: "700", color: "#1a1a1a" },
@@ -890,7 +1028,7 @@ const styles = StyleSheet.create({
     },
     timeBadgeText: { fontSize: 11, fontWeight: "600", color: "#6b7280" },
 
-    cardMiddleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 14 },
+    cardMiddleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 14, flexWrap: "wrap" },
     rankLabel: { fontSize: 15, fontWeight: "600", color: "#6b7280", width: 36 },
     pointsCircle: {
         paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
@@ -903,13 +1041,63 @@ const styles = StyleSheet.create({
     thumbCount: { fontSize: 13, fontWeight: "600", color: "#9b9b9b" },
     thumbCountActive: { color: "#1F9F4E" },
 
-    // ── New: multi-vote +/- control (multiple-type polls only) ───────────────
-    multiVoteRow: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 12 },
+    // ── Multi-vote +/- control (multiple-type polls only) ─────────────────────
+    multiVoteRow: { flexDirection: "row", alignItems: "center", gap: 6, marginLeft: 8, flexShrink: 0 },
     multiVoteBtn: {
-        width: 26, height: 26, borderRadius: 13,
-        backgroundColor: "#f3f4f6", alignItems: "center", justifyContent: "center",
+        width: 36, height: 36, borderRadius: 40, padding: 10,
+        backgroundColor: "#ebeff5ff", alignItems: "center", justifyContent: "center",
     },
     multiVoteBtnDisabled: { backgroundColor: "#f9fafb" },
+
+    // ── Right-hand group (status message + vote controls) ─────────────────────
+    rightGroup: {
+        flexDirection: "row",
+        alignItems: "center",
+        flexShrink: 1,
+        justifyContent: "flex-end",
+        flexWrap: "wrap",
+        maxWidth: "60%",
+    },
+    statusMsgWrap: {
+        flexShrink: 1,
+        maxWidth: 70,
+        alignItems: "flex-end",
+        justifyContent: "center",
+        marginRight: 4,
+    },
+
+    // ── Pay panel (shown when "+" is tapped on a multiple-vote poll) ──────────
+    payPanel: {
+        marginTop: 10,
+        padding: 10,
+        borderRadius: 10,
+        backgroundColor: "#f3f4f6",
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        gap: 8,
+    },
+    payPanelText: { fontSize: 12, color: "#4b5563", fontWeight: "500" },
+    payPanelRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    payPanelInput: {
+        width: 70, height: 36, borderRadius: 8,
+        backgroundColor: "#fff", borderWidth: 1, borderColor: "#d1d5db",
+        paddingHorizontal: 10, fontSize: 14, fontWeight: "600", color: "#1a1a1a",
+    },
+    payPanelTotal: { fontSize: 14, fontWeight: "700", color: "#15803d" },
+    payPanelBtnRow: { alignItems: "center", flexDirection: "row", justifyContent: "flex-end", gap: 8 },
+    payPanelCancelBtn: {
+        paddingHorizontal: 14, height: 36, borderRadius: 8,
+        alignItems: "center", justifyContent: "center",
+        backgroundColor: "#e5e7eb",
+    },
+    payPanelCancelText: { fontSize: 13, fontWeight: "600", color: "#4b5563" },
+    payPanelPayBtn: {
+        paddingHorizontal: 20, height: 36, borderRadius: 8,
+        alignItems: "center", justifyContent: "center",
+        backgroundColor: "#1F9F4E",
+    },
+    payPanelPayBtnDisabled: { backgroundColor: "#a7d9b8" },
+    payPanelPayText: { fontSize: 13, fontWeight: "700", color: "#fff" },
 
     noticeRow: {
         flexDirection: "row", alignItems: "center",

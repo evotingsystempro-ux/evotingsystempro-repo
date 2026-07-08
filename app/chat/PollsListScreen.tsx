@@ -18,7 +18,16 @@ import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import ReusableScreen from "@/components/ReusableScreen";
 import { db } from "@/firebase";
-import { collectionGroup, deleteDoc, doc, getDocs } from "firebase/firestore";
+import {
+    collection,
+    deleteDoc,
+    doc,
+    getDocs,
+    query,
+    orderBy,
+    limit,
+    startAfter,
+} from "firebase/firestore";
 import { GlobalContext } from "@/context";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -26,23 +35,25 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+// Matches the flat POLL_TITLE_DB/{pollId} schema (creatorEmail/creatorName
+// are denormalized onto each poll doc, so no more nested collectionGroup query).
 
 interface PollSummary {
     pollId: string;
-    docPath: string; // NEW: path to the poll document in Firestore
+    docPath: string; // path to the poll document in Firestore (POLL_TITLE_DB/{pollId})
     title: string;
     pollType: "single" | "multiple";
     status: "active" | "closed";
     deadline: string | null;
     creatorEmail: string;
     creatorName: string;
-    logUrl?: string; // Added logUrl for the poll logo
+    logoUrl?: string;
     aspirantCount: number;
     dateCreated: string;
     createdAt: number;
     showResults: boolean;
     isAnonymous: boolean;
-    requires_voters_validation: boolean;
+    requires_voters_validation: "true" | "false";
     poll_verification_status: "verified" | "not_verified";
 }
 
@@ -69,6 +80,8 @@ const avatarColorFor = (key: string) => {
     return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 };
 
+const PAGE_SIZE = 50;
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function PollsListScreen() {
@@ -87,42 +100,60 @@ export default function PollsListScreen() {
     const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
     const [confirmTarget, setConfirmTarget] = useState<{ docPath: string; title: string } | null>(null);
 
-    // ── Fetch all poll docs via collectionGroup query ─────────────────────────
+    // ── Pagination state ──────────────────────────────────────────────────────
+    const [lastDoc, setLastDoc] = useState<any>(null);
+    const [hasMore, setHasMore] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
 
-    const fetchPolls = useCallback(async () => {
-        try {
-            const pollsSnap = await getDocs(collectionGroup(db, "polls"));
+    // ── Fetch polls from flat POLL_TITLE_DB collection (paginated) ─────────────
 
+    const buildPollsQuery = (afterDoc?: any) => {
+        const constraints: any[] = [orderBy("createdAt", "desc")];
+        if (afterDoc) constraints.push(startAfter(afterDoc));
+        constraints.push(limit(PAGE_SIZE));
+        return query(collection(db, "POLL_TITLE_DB"), ...constraints);
+    };
+
+    const processSnapshot = useCallback((pollsSnap: any, append: boolean) => {
+        const newPolls: PollSummary[] = pollsSnap.docs.map((pd: any) => {
+            const d = pd.data();
+            const creatorEmail: string = d.creatorEmail ?? "unknown";
+            const creatorName: string = d.creatorName ?? "Unknown";
+            return {
+                pollId: d.pollId ?? pd.id,
+                docPath: pd.ref.path,
+                title: d.title ?? "Untitled Poll",
+                pollType: d.pollType ?? "single",
+                status: d.status ?? "active",
+                deadline: d.deadline ?? null,
+                creatorEmail,
+                creatorName,
+                logoUrl: d.logoUrl,
+                aspirantCount: d.aspirantCount ?? 0,
+                dateCreated: d.dateCreated ?? "",
+                createdAt: d.createdAt?.toMillis?.() ?? 0,
+                showResults: d.showResults ?? true,
+                isAnonymous: d.isAnonymous ?? false,
+                requires_voters_validation: d.requires_voters_validation ?? "false",
+                poll_verification_status: d.poll_verification_status ?? "not_verified",
+            } as PollSummary;
+        });
+
+        setGroups((prevGroups) => {
             const byCreator = new Map<string, PollSummary[]>();
             const creatorNames = new Map<string, string>();
 
-            pollsSnap.docs.forEach((pd) => {
-                const d = pd.data();
-                const creatorEmail: string = d.creatorEmail ?? pd.ref.parent.parent?.id ?? "unknown";
-                const creatorName: string = d.creatorName ?? "Unknown";
+            if (append) {
+                prevGroups.forEach((g) => {
+                    byCreator.set(g.creatorEmail, [...g.polls]);
+                    creatorNames.set(g.creatorEmail, g.creatorName);
+                });
+            }
 
-                const summary: PollSummary = {
-                    pollId: d.pollId ?? pd.id,
-                    docPath: pd.ref.path, // NEW
-                    title: d.title ?? "Untitled Poll",
-                    pollType: d.pollType ?? "single",
-                    status: d.status ?? "active",
-                    deadline: d.deadline ?? null,
-                    creatorEmail,
-                    creatorName,
-                    logUrl: d.logUrl ?? d.logoUrl, // Accounts for the logUrl parameter
-                    aspirantCount: d.aspirantCount ?? 0,
-                    dateCreated: d.dateCreated ?? "",
-                    createdAt: d.createdAt?.toMillis?.() ?? 0,
-                    showResults: d.showResults ?? true,
-                    isAnonymous: d.isAnonymous ?? false,
-                    requires_voters_validation: d.requires_voters_validation ?? "false",
-                    poll_verification_status: d.poll_verification_status ?? "not_verified",
-                };
-
-                if (!byCreator.has(creatorEmail)) byCreator.set(creatorEmail, []);
-                byCreator.get(creatorEmail)!.push(summary);
-                creatorNames.set(creatorEmail, creatorName);
+            newPolls.forEach((p) => {
+                if (!byCreator.has(p.creatorEmail)) byCreator.set(p.creatorEmail, []);
+                byCreator.get(p.creatorEmail)!.push(p);
+                creatorNames.set(p.creatorEmail, p.creatorName);
             });
 
             const groupList: CreatorGroup[] = Array.from(byCreator.entries()).map(
@@ -137,15 +168,38 @@ export default function PollsListScreen() {
             );
 
             groupList.sort((a, b) => b.polls[0].createdAt - a.polls[0].createdAt);
-            setGroups(groupList);
-            applyFilters(groupList, search, filter);
+            return groupList;
+        });
+    }, []);
+
+    const fetchPolls = useCallback(async () => {
+        try {
+            const pollsSnap = await getDocs(buildPollsQuery());
+            processSnapshot(pollsSnap, false);
+            setLastDoc(pollsSnap.docs[pollsSnap.docs.length - 1] ?? null);
+            setHasMore(pollsSnap.docs.length === PAGE_SIZE);
         } catch (err) {
             console.error("fetchPolls:", err);
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [processSnapshot]);
+
+    const loadMorePolls = useCallback(async () => {
+        if (!hasMore || loadingMore || !lastDoc) return;
+        setLoadingMore(true);
+        try {
+            const pollsSnap = await getDocs(buildPollsQuery(lastDoc));
+            processSnapshot(pollsSnap, true);
+            setLastDoc(pollsSnap.docs[pollsSnap.docs.length - 1] ?? null);
+            setHasMore(pollsSnap.docs.length === PAGE_SIZE);
+        } catch (err) {
+            console.error("loadMorePolls:", err);
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [hasMore, loadingMore, lastDoc, processSnapshot]);
 
     useEffect(() => { fetchPolls(); }, [fetchPolls]);
 
@@ -179,7 +233,12 @@ export default function PollsListScreen() {
         applyFilters(groups, search, filter);
     }, [search, filter, groups]);
 
-    const onRefresh = () => { setRefreshing(true); fetchPolls(); };
+    const onRefresh = () => {
+        setRefreshing(true);
+        setLastDoc(null);
+        setHasMore(true);
+        fetchPolls();
+    };
 
     const openPoll = (poll: PollSummary) => {
         router.navigate({
@@ -353,15 +412,17 @@ export default function PollsListScreen() {
                         <View><Text style={[styles.headerTitle, styles.headerTitleCentered]} numberOfLines={1}>
                             All Polls
                         </Text></View>
+                        <View style={{ flexDirection: "row", gap: 2, }}>
+                            <View style={styles.liveBadge}>
+                                <View style={styles.liveBadgeDot} />
+                                <Text style={styles.liveBadgeText}>{livePolls} Live</Text>
+                            </View>
 
-                        <View style={styles.liveBadge}>
-                            <View style={styles.liveBadgeDot} />
-                            <Text style={styles.liveBadgeText}>{livePolls} Live</Text>
+                            <View style={styles.headerCountPill}>
+                                <Text style={styles.headerCountText}>{totalPolls}</Text>
+                            </View>
                         </View>
 
-                        <View style={styles.headerCountPill}>
-                            <Text style={styles.headerCountText}>{totalPolls}</Text>
-                        </View>
                     </>
                 ) : (
                     <View style={styles.headerSearchExpanded}>
@@ -426,194 +487,209 @@ export default function PollsListScreen() {
                         </Text>
                     </View>
                 ) : (
-                    filtered.map((group) => {
-                        const isCollapsed = collapsed.has(group.creatorEmail);
-                        const liveInGroup = group.polls.filter((p) => !isPollClosed(p)).length;
-                        const avatarColor = avatarColorFor(group.creatorEmail);
+                    <>
+                        {filtered.map((group) => {
+                            const isCollapsed = collapsed.has(group.creatorEmail);
+                            const liveInGroup = group.polls.filter((p) => !isPollClosed(p)).length;
+                            const avatarColor = avatarColorFor(group.creatorEmail);
 
-                        return (
-                            <View key={group.creatorEmail} style={styles.groupCard}>
-                                {/* Creator header */}
-                                <TouchableOpacity
-                                    style={styles.creatorHeader}
-                                    onPress={() => toggleGroup(group.creatorEmail)}
-                                    activeOpacity={0.7}
-                                >
+                            return (
+                                <View key={group.creatorEmail} style={styles.groupCard}>
+                                    {/* Creator header */}
+                                    <TouchableOpacity
+                                        style={styles.creatorHeader}
+                                        onPress={() => toggleGroup(group.creatorEmail)}
+                                        activeOpacity={0.7}
+                                    >
 
-                                    <View style={styles.creatorInfo}>
-                                        <View style={{ flexDirection: "row", alignItems: "center", }}>
+                                        <View style={styles.creatorInfo}>
+                                            <View style={{ flexDirection: "row", alignItems: "center", }}>
+
+                                                <View>
+                                                    <Text style={[styles.creatorName, { textTransform: "capitalize" }]} numberOfLines={1}>
+                                                        {group.creatorName}
+                                                    </Text>
+                                                </View>
+
+                                                <View>
+                                                    <Text>: POLL</Text>
+                                                </View>
+
+                                            </View>
 
                                             <View>
-                                                <Text style={[styles.creatorName, { textTransform: "capitalize" }]} numberOfLines={1}>
-                                                    {group.creatorName}
+                                                <Text style={styles.creatorEmail} numberOfLines={1}>
+                                                    {truncateMiddle(group.creatorEmail, 15, 10)}
                                                 </Text>
                                             </View>
 
-                                            <View>
-                                                <Text>: POLL</Text>
-                                            </View>
-
                                         </View>
 
-                                        <View>
-                                            <Text style={styles.creatorEmail} numberOfLines={1}>
-                                                {truncateMiddle(group.creatorEmail, 15, 10)}
+                                        <View style={styles.creatorRight}>
+                                            {liveInGroup > 0 && <View style={styles.miniLiveDot} />}
+                                            <Text style={styles.creatorPollCount}>
+                                                {group.polls.length}{group.polls.length > 1 ? " Polls" : " Poll"}
                                             </Text>
+                                            <Ionicons
+                                                name={isCollapsed ? "chevron-down" : "chevron-up"}
+                                                size={18}
+                                                color="#9CA3AF"
+                                            />
                                         </View>
+                                    </TouchableOpacity>
 
-                                    </View>
+                                    {/* Poll rows */}
+                                    {!isCollapsed && (
+                                        <View style={styles.pollsWrap}>
+                                            {group.polls.map((poll) => {
+                                                const closed = isPollClosed(poll);
+                                                const expired = isExpired(poll.deadline);
+                                                const requiresVoterValidation = poll.requires_voters_validation === "true";
+                                                const verified = poll.poll_verification_status === "verified";
 
-                                    <View style={styles.creatorRight}>
-                                        {liveInGroup > 0 && <View style={styles.miniLiveDot} />}
-                                        <Text style={styles.creatorPollCount}>
-                                            {group.polls.length}{group.polls.length > 1 ? " Polls" : " Poll"}
-                                        </Text>
-                                        <Ionicons
-                                            name={isCollapsed ? "chevron-down" : "chevron-up"}
-                                            size={18}
-                                            color="#9CA3AF"
-                                        />
-                                    </View>
-                                </TouchableOpacity>
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={poll.pollId}
+                                                        style={styles.pollCard}
+                                                        onPress={() => openPoll(poll)}
+                                                        activeOpacity={0.6}
+                                                    >
+                                                        {/* Top Section: Logo & Details */}
+                                                        <View style={styles.pollTopSection}>
 
-                                {/* Poll rows */}
-                                {!isCollapsed && (
-                                    <View style={styles.pollsWrap}>
-                                        {group.polls.map((poll) => {
-                                            const closed = isPollClosed(poll);
-                                            const expired = isExpired(poll.deadline);
-                                            const requiresVoterValidation = poll.requires_voters_validation === true;
-                                            const verified = poll.poll_verification_status === "verified";
+                                                            {/* Logo Thumbnail */}
 
-                                            return (
-                                                <TouchableOpacity
-                                                    key={poll.pollId}
-                                                    style={styles.pollCard}
-                                                    onPress={() => openPoll(poll)}
-                                                    activeOpacity={0.6}
-                                                >
-                                                    {/* Top Section: Logo & Details */}
-                                                    <View style={styles.pollTopSection}>
-
-                                                        {/* Logo Thumbnail */}
-                                                        {poll.logUrl ? (
                                                             <View style={styles.pollLogoWrapper}>
-                                                                <Image
-                                                                    source={{ uri: poll.logUrl }}
+
+                                                                <Ionicons style={styles.avatarPlaceholder} name="stats-chart" size={24} color="#9CA3AF" />
+
+                                                                {poll.logoUrl ? (<Image
+                                                                    source={{ uri: poll.logoUrl }}
                                                                     style={styles.pollLogoInner}
                                                                     resizeMode="cover"
-                                                                />
+                                                                />) : (null)}
                                                             </View>
-                                                        ) : (
-                                                            <View style={styles.pollLogoPlaceholder}>
-                                                                <Ionicons name="stats-chart" size={24} color="#9CA3AF" />
-                                                            </View>
-                                                        )}
 
-                                                        {/* Info Body */}
-                                                        <View style={styles.pollDetailsBody}>
-                                                            <View style={styles.pollHeader}>
-                                                                <Text style={styles.pollTitle} numberOfLines={2}>
-                                                                    {poll.title}
-                                                                </Text>
-                                                                <View style={[
-                                                                    styles.statusBadge,
-                                                                    closed ? styles.badgeClosed : styles.badgeActive, { backgroundColor: expired ? "#FEE2EE" : closed ? "#F3F4F6" : "#D1FAE5" }
-                                                                ]}>
-                                                                    <Text style={[
-                                                                        styles.badgeText,
-                                                                        closed ? styles.badgeTextClosed : styles.badgeTextActive, { color: expired ? "#EF4444" : "#1F9F4E" }
+
+                                                            {/* Info Body */}
+                                                            <View style={styles.pollDetailsBody}>
+                                                                <View style={styles.pollHeader}>
+                                                                    <Text style={styles.pollTitle} numberOfLines={2}>
+                                                                        {poll.title}
+                                                                    </Text>
+                                                                    <View style={[
+                                                                        styles.statusBadge,
+                                                                        closed ? styles.badgeClosed : styles.badgeActive, { backgroundColor: expired ? "#FEE2EE" : closed ? "#F3F4F6" : "#D1FAE5" }
                                                                     ]}>
-                                                                        {closed ? (expired ? "Expired" : "Closed") : "Live"}
-                                                                    </Text>
+                                                                        <Text style={[
+                                                                            styles.badgeText,
+                                                                            closed ? styles.badgeTextClosed : styles.badgeTextActive, { color: expired ? "#EF4444" : "#1F9F4E" }
+                                                                        ]}>
+                                                                            {closed ? (expired ? "Expired" : "Closed") : "Live"}
+                                                                        </Text>
+                                                                    </View>
+                                                                </View>
+
+                                                                {/* Metadata */}
+                                                                <View style={styles.pollMetaRow}>
+                                                                    {poll.deadline ? (
+                                                                        <Text style={styles.metaText}>
+                                                                            {poll.deadline ? `Ex: ${formatDeadline(poll.deadline)}` : "No deadline"}
+                                                                        </Text>
+                                                                    ) : null}
+
+
+                                                                    <View style={styles.metaIconGroup}>
+                                                                        <Ionicons name="people" size={14} color="#6B7280" />
+                                                                        <Text style={styles.metaText}>
+                                                                            {poll.aspirantCount} Aspirant{poll.aspirantCount !== 1 ? "s" : ""}
+                                                                        </Text>
+                                                                    </View>
+
+
+                                                                    {poll.pollType === "multiple" && (
+                                                                        <>
+                                                                            <View style={styles.metaIconGroup}>
+                                                                                <Ionicons name="layers" size={14} color="#6B7280" />
+                                                                                <Text style={styles.metaText}>Multi</Text>
+                                                                            </View>
+                                                                        </>
+                                                                    )}
                                                                 </View>
                                                             </View>
-
-                                                            {/* Metadata */}
-                                                            <View style={styles.pollMetaRow}>
-                                                                {poll.deadline ? (
-                                                                    <Text style={styles.metaText}>
-                                                                        {poll.deadline ? `Ex: ${formatDeadline(poll.deadline)}` : "No deadline"}
-                                                                    </Text>
-                                                                ) : null}
-
-
-                                                                <View style={styles.metaIconGroup}>
-                                                                    <Ionicons name="people" size={14} color="#6B7280" />
-                                                                    <Text style={styles.metaText}>
-                                                                        {poll.aspirantCount} Aspirant{poll.aspirantCount !== 1 ? "s" : ""}
-                                                                    </Text>
-                                                                </View>
-
-
-                                                                {poll.pollType === "multiple" && (
-                                                                    <>
-                                                                        <View style={styles.metaIconGroup}>
-                                                                            <Ionicons name="layers" size={14} color="#6B7280" />
-                                                                            <Text style={styles.metaText}>Multi</Text>
-                                                                        </View>
-                                                                    </>
-                                                                )}
-                                                            </View>
-                                                        </View>
-                                                    </View>
-
-                                                    {/* Bottom Row: Badges & Arrow */}
-                                                    <View style={styles.pollFooter}>
-                                                        <View style={styles.badgeGroup}>
-                                                            {requiresVoterValidation ? (
-                                                                <View style={styles.tagVIP}>
-                                                                    <Ionicons name="shield-checkmark" size={12} color="#D97706" />
-                                                                    <Text style={styles.tagTextVIP}>VIP Only</Text>
-                                                                </View>
-                                                            ) : (
-                                                                <View style={styles.tagStandard}>
-                                                                    <Ionicons name="globe-outline" size={12} color="#4B5563" />
-                                                                    <Text style={styles.tagTextStandard}>Open to all</Text>
-                                                                </View>
-                                                            )}
-
-                                                            {verified ? (
-                                                                <View style={styles.tagVerified}>
-                                                                    <Ionicons name="checkmark-circle" size={12} color="#1F9F4E" />
-                                                                    <Text style={styles.tagTextVerified}>Verified Poll</Text>
-                                                                </View>
-                                                            ) : (
-                                                                <View style={styles.tagUnverified}>
-                                                                    <Ionicons name="alert-circle" size={12} color="#EF4444" />
-                                                                    <Text style={styles.tagTextUnverified}>Unverified Poll</Text>
-                                                                </View>
-                                                            )}
                                                         </View>
 
-                                                        <View style={{ zIndex: 1, flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                                            {voterEmail === poll.creatorEmail && <TouchableOpacity
-                                                                onPress={() => deletePoll(poll.docPath, poll.title)}
-                                                                disabled={deletingIds.has(poll.docPath)}
-                                                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                                            >
-                                                                {deletingIds.has(poll.docPath) ? (
-                                                                    <ActivityIndicator size="small" color="#9a9898ff" />
+                                                        {/* Bottom Row: Badges & Arrow */}
+                                                        <View style={styles.pollFooter}>
+                                                            <View style={styles.badgeGroup}>
+                                                                {requiresVoterValidation ? (
+                                                                    <View style={styles.tagVIP}>
+                                                                        <Ionicons name="shield-checkmark" size={12} color="#D97706" />
+                                                                        <Text style={styles.tagTextVIP}>VIP Only</Text>
+                                                                    </View>
                                                                 ) : (
-                                                                    <Ionicons
-                                                                        style={{ position: "relative", left: 3 }}
-                                                                        name="trash"
-                                                                        size={16}
-                                                                        color="#9a9898ff"
-                                                                    />
+                                                                    <View style={styles.tagStandard}>
+                                                                        <Ionicons name="globe-outline" size={12} color="#4B5563" />
+                                                                        <Text style={styles.tagTextStandard}>Open to all</Text>
+                                                                    </View>
                                                                 )}
-                                                            </TouchableOpacity>}
-                                                            <Ionicons name="arrow-forward" size={16} color="#9CA3AF" />
+
+                                                                {verified ? (
+                                                                    <View style={styles.tagVerified}>
+                                                                        <Ionicons name="checkmark-circle" size={12} color="#1F9F4E" />
+                                                                        <Text style={styles.tagTextVerified}>Verified Poll</Text>
+                                                                    </View>
+                                                                ) : (
+                                                                    <View style={styles.tagUnverified}>
+                                                                        <Ionicons name="alert-circle" size={12} color="#EF4444" />
+                                                                        <Text style={styles.tagTextUnverified}>Unverified Poll</Text>
+                                                                    </View>
+                                                                )}
+                                                            </View>
+
+                                                            <View style={{ zIndex: 1, flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                                                {voterEmail === poll.creatorEmail && <TouchableOpacity
+                                                                    onPress={() => deletePoll(poll.docPath, poll.title)}
+                                                                    disabled={deletingIds.has(poll.docPath)}
+                                                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                                >
+                                                                    {deletingIds.has(poll.docPath) ? (
+                                                                        <ActivityIndicator size="small" color="#9a9898ff" />
+                                                                    ) : (
+                                                                        <Ionicons
+                                                                            style={{ position: "relative", left: 3 }}
+                                                                            name="trash"
+                                                                            size={16}
+                                                                            color="#9a9898ff"
+                                                                        />
+                                                                    )}
+                                                                </TouchableOpacity>}
+                                                                <Ionicons name="arrow-forward" size={16} color="#9CA3AF" />
+                                                            </View>
                                                         </View>
-                                                    </View>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    )}
+                                </View>
+                            );
+                        })}
+
+                        {hasMore && (
+                            <TouchableOpacity
+                                style={styles.loadMoreBtn}
+                                onPress={loadMorePolls}
+                                disabled={loadingMore}
+                            >
+                                {loadingMore ? (
+                                    <ActivityIndicator size="small" color="#1F9F4E" />
+                                ) : (
+                                    <Text style={styles.loadMoreText}>Load more polls</Text>
                                 )}
-                            </View>
-                        );
-                    })
+                            </TouchableOpacity>
+                        )}
+                    </>
                 )}
             </ScrollView>
             <View style={styles.bottomNav}>
@@ -938,11 +1014,11 @@ const styles = StyleSheet.create({
     pollLogoWrapper: {
         width: 62,
         height: 62,
-        borderRadius: 48,
+        borderRadius: 40,
         backgroundColor: "#F3F4F6",
         borderWidth: 1,
         borderColor: "#E5E7EB",
-        padding: 3,
+        padding: 4,
         alignItems: "center",
         justifyContent: "center",
         overflow: "hidden",
@@ -952,4 +1028,16 @@ const styles = StyleSheet.create({
         height: "120%",
         borderRadius: 50,
     },
+    loadMoreBtn: {
+        marginTop: 8,
+        marginBottom: 4,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1,
+        borderColor: "#E5E7EB",
+        alignItems: "center",
+    },
+    loadMoreText: { fontSize: 14, fontWeight: "600", color: "#1F9F4E" },
+    avatarPlaceholder: { position: "absolute" },
 });

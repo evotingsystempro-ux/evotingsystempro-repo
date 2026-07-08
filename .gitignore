@@ -33,13 +33,13 @@ yarn-error.*
 *.pem
 
 # local env files
-.env
+env
 .env*.local
 
 # typescript
 *.tsbuildinfo
 
-# secrets & large datasets
-#google-services.json
-#serviceAccountKey.json
+ secrets & large datasets
+google-services.json
+serviceAccountKey.json
 

@@ -171,7 +171,7 @@ export default function LoginScreen() {
 
           {/* ── Footer ── */}
           <View style={S.footer}>
-            <Text style={S.footerCopy}>© 2025 eVoting System Pro</Text>
+            <Text style={S.footerCopy}>© 2026 eVoting System Pro</Text>
             <TouchableOpacity onPress={() => router.push("./PrivacyPolicy&TermsOfUse")}>
               <Text style={S.footerLink}>Terms & Conditions · Privacy Policy</Text>
             </TouchableOpacity>
