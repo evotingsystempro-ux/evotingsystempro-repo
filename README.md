@@ -4,7 +4,7 @@
 
 [![Live App](https://img.shields.io/badge/Live%20App-evotingsystempro.expo.app-4F46E5?style=for-the-badge)](https://evotingsystempro.expo.app)
 [![GitHub](https://img.shields.io/badge/GitHub-evotingsystempro-181717?style=for-the-badge&logo=github)](https://github.com/evotingsystempro)
-[![Watch Demo](https://img.shields.io/badge/Watch-Demo%20Video-EA4335?style=for-the-badge&logo=googledrive&logoColor=white)](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c)
+[![Watch Demo](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FeVotingSystemPro-Screen-Videos%2Fevoting_system_pro_TUT.mp4?alt=media&token=fc35d2f7-665b-4148-ae8a-61fef48373bc)](https://firebasestorage.googleapis.com/v0/b/evotingsystempro-788f7.firebasestorage.app/o/eVoting_System_Pro%2FHACKATHON1.mp4?alt=media&token=0ca5479d-8169-4538-b3ee-b5966c76847c)
 
 ---
 
